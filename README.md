@@ -2,7 +2,7 @@
 
 InstaSlice facilitates the use of [Dynamic Resource
 Allocation](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/)
-(DRA) on Kubernetes for GPU sharing.
+(DRA) on Kubernetes clusters for GPU sharing.
 
 For its initial release, InstaSlice facilitates the allocation of [MIG
 slices](https://www.nvidia.com/en-us/technologies/multi-instance-gpu/) on
@@ -171,9 +171,9 @@ kubectl apply -f hack/mig-profiles.yaml --namespace <some-namespace>
 
 ### Running an example pod
 
-To deploy an example pod on the cluster run:
+To deploy an [example pod](samples/sample.yaml) on the cluster run:
 ```sh
-kubectl apply -f sample.yaml
+kubectl apply -f samples/sample.yaml
 ```
 
 Check the resulting pod spec using:
@@ -183,7 +183,7 @@ kubectl get -o yaml pod sample
 
 Delete the pod with:
 ```sh
-kubectl delete -f sample.yaml
+kubectl delete -f samples/sample.yaml
 ```
 
 ### Uninstalling InstaSlice from the cluster
