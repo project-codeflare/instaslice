@@ -18,6 +18,9 @@ operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/in
 with [NVIDIA DRA driver](https://github.com/NVIDIA/k8s-dra-driver) without
 requiring changes to pod specs.
 
+See this [demonstration](demo) for a detailed comparison of MIG slicing using MIG manager
+vs. DRA driver vs. InstaSlice.
+
 ## Description
 
 InstaSlice implements a mutating webhook for pods that automatically rewrites
@@ -62,7 +65,7 @@ spec:
       resourceClaimTemplateName: mig-1g.5gb
 ```
 
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
@@ -126,7 +129,7 @@ To deploy the templates to a given namespace run:
 kubectl apply -f hack/mig-profiles.yaml --namespace <some-namespace>
 ```
 
-### Running an example
+### Running an example pod
 
 To deploy an example pod on the cluster run:
 ```sh
