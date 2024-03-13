@@ -65,6 +65,30 @@ spec:
       resourceClaimTemplateName: mig-1g.5gb
 ```
 
+The latter spec assumes the following resource claim templates and parameters
+are already deployed to the pod namespace:
+```yaml
+apiVersion: gpu.resource.nvidia.com/v1alpha1
+kind: MigDeviceClaimParameters
+metadata:
+  name: mig-1g.5gb
+spec:
+  profile: 1g.5gb
+---
+apiVersion: resource.k8s.io/v1alpha2
+kind: ResourceClaimTemplate
+metadata:
+  name: mig-1g.5gb
+spec:
+  spec:
+    resourceClassName: gpu.nvidia.com
+    parametersRef:
+      apiGroup: gpu.resource.nvidia.com
+      kind: MigDeviceClaimParameters
+      name: mig-1g.5gb
+```
+The deployment instructions below cover this prerequisite.
+
 ## Getting started
 
 ### Prerequisites
