@@ -91,10 +91,19 @@ The deployment instructions below cover this prerequisite.
 
 ## Getting started
 
-### Prerequisites
+### Configuring a Kubernetes cluster
 
 InstaSlice assumes a DRA-enabled Kubernetes cluster. It has been tested against
-Kubernetes v1.27. Such a cluster can be obtained using
+Kubernetes v1.27.
+
+For development or testing purposes, InstaSlice can run on a cluster without
+GPUs with a minimal configuration (option 1). In order run pods on MIG slices, a
+GPU-enabled, DRA-enabled cluster running the NVIDIA DRA driver is necessary
+(option 2).
+
+#### Option 1: test cluster without GPUs
+
+A cluster capable of running InstaSlice can be obtained using
 [kind](https://kind.sigs.k8s.io) v0.19 with the provided cluster
 [configuration](hack/kind-config.yaml).
 ```sh
@@ -107,13 +116,20 @@ driver](https://github.com/NVIDIA/k8s-dra-driver) are installed on the cluster:
 kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-dra-driver/b6c7aae2b87d857668f417689462da752090406f/deployments/helm/k8s-dra-driver/crds/gpu.resource.nvidia.com_migdeviceclaimparameters.yaml
 ```
 
-Such a cluster will be enough to develop or experiment with InstaSlice, but of
-course, in order to dynamically create and destroy MIG slices on NVIDIA GPUs, a
-GPU-enabled, DRA-enabled cluster running the NVIDIA DRA driver will be
-necessary. Please refer to
+On such a cluster, InstaSlice will be able to rewrite pod specs, but of course
+the cluster will be unable to satisfy GPU resource claims. Pods will remain
+forever pending.
+
+#### Option 2: GPU-enabled cluster
+
+In order to dynamically create and destroy MIG slices on NVIDIA GPUs, a
+GPU-enabled, DRA-enabled cluster running the NVIDIA DRA driver is necessary.
+Please refer to
 [https://github.com/NVIDIA/k8s-dra-driver](https://github.com/NVIDIA/k8s-dra-driver/tree/b6c7aae2b87d857668f417689462da752090406f)
 for further instructions. Please note that InstaSlice has been developed and
 tested against commit `b6c7aae` of this driver.
+
+### Deploying cert-manager
 
 InstaSlice assumes [cert-manager](https://github.com/cert-manager/cert-manager)
 is deployed on the cluster:
