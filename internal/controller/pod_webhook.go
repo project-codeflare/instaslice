@@ -38,6 +38,7 @@ type PodAnnotator struct {
 
 const nvidiaPrefix = "nvidia.com/"
 const migPrefix = nvidiaPrefix + "mig-"
+const instasliceAnnotation = "instaslice"
 
 func appendRC(claims []v1.ResourceClaim, name string) []v1.ResourceClaim {
 	for _, c := range claims {
@@ -57,14 +58,42 @@ func appendPRC(claims []v1.PodResourceClaim, name string, source v1.ClaimSource)
 	return append(claims, v1.PodResourceClaim{Name: name, Source: source})
 }
 
+func filterRC(claims []v1.ResourceClaim, suffix string) []v1.ResourceClaim {
+	a := []v1.ResourceClaim{}
+	for _, claim := range claims {
+		if !strings.HasSuffix(claim.Name, suffix) {
+			a = append(a, claim)
+		}
+	}
+	return a
+}
+
+func filterPRC(claims []v1.PodResourceClaim, suffix string) []v1.PodResourceClaim {
+	a := []v1.PodResourceClaim{}
+	for _, claim := range claims {
+		if !strings.HasSuffix(claim.Name, suffix) {
+			a = append(a, claim)
+		}
+	}
+	return a
+}
 func (a *PodAnnotator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	pod := &v1.Pod{}
 	err := a.Decoder.Decode(req, pod)
 	if err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
+	oldPod := &v1.Pod{}
+	var uid string
+	if a.Decoder.DecodeRaw(req.OldObject, oldPod) == nil && oldPod.Annotations != nil && oldPod.Annotations[instasliceAnnotation] != "" {
+		uid = oldPod.Annotations[instasliceAnnotation]
+		pod.Spec.ResourceClaims = filterPRC(pod.Spec.ResourceClaims, uid)
+	} else {
+		uid = uuid.New().String()
+	}
 	for i := range pod.Spec.Containers {
 		container := &pod.Spec.Containers[i]
+		container.Resources.Claims = filterRC(container.Resources.Claims, uid)
 		for resourceName, quantity := range container.Resources.Limits {
 			name := string(resourceName)
 			if strings.HasPrefix(name, migPrefix) {
@@ -74,7 +103,7 @@ func (a *PodAnnotator) Handle(ctx context.Context, req admission.Request) admiss
 				}
 				templateName := name[len(nvidiaPrefix):]
 				for j := 0; j < int(count); j++ {
-					claimName := uuid.New().String()
+					claimName := fmt.Sprintf("%v-%v-%v-%v", container.Name, strings.ReplaceAll(templateName, ".", "-"), j, uid)
 					container.Resources.Claims = appendRC(container.Resources.Claims, claimName)
 					pod.Spec.ResourceClaims = appendPRC(pod.Spec.ResourceClaims, claimName, v1.ClaimSource{ResourceClaimTemplateName: &templateName})
 				}
@@ -83,6 +112,10 @@ func (a *PodAnnotator) Handle(ctx context.Context, req admission.Request) admiss
 			}
 		}
 	}
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[instasliceAnnotation] = uid
 	marshaledPod, err := json.Marshal(pod)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
