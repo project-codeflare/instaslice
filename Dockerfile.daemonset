@@ -1,0 +1,69 @@
+ARG GOLANG_VERSION=1.22.2
+FROM nvidia/cuda:12.4.1-base-ubuntu22.04 as build
+
+RUN apt-get update && \
+    apt-get install -y wget make git gcc \
+    && \
+    rm -rf /var/lib/apt/lists/*
+
+ARG GOLANG_VERSION=x.x.x
+#TODO: Remove arch discovery
+RUN set -eux; \
+    \
+    arch="$(uname -m)"; \
+    case "${arch##*-}" in \
+        x86_64 | amd64) ARCH='amd64' ;; \
+        ppc64el | ppc64le) ARCH='ppc64le' ;; \
+        aarch64) ARCH='arm64' ;; \
+        *) echo "unsupported architecture" ; exit 1 ;; \
+    esac; \
+       wget -nv -O - https://storage.googleapis.com/golang/go1.22.2.linux-amd64.tar.gz \
+    | tar -C /usr/local -xz
+
+ENV GOPATH /go
+ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
+
+WORKDIR /workspace
+# Copy the Go Modules manifests
+COPY go.mod go.mod
+COPY go.sum go.sum
+# cache deps before building and copying source so that we don't need to re-download as much
+# and so that source changes don't invalidate our downloaded layer
+RUN go mod download
+
+# Copy the go source
+COPY cmd/daemonset/main.go cmd/daemonset/main.go
+COPY api/ api/
+COPY internal/controller/daemonset_controller.go internal/controller/daemonset_controller.go
+
+# Build
+# the GOARCH has not a default value to allow the binary be built according to the host where the command
+# was called. For example, if we call make docker-build in a local env which has the Apple Silicon M1 SO
+# the docker BUILDPLATFORM arg will be linux/arm64 when for Apple x86 it will be linux/amd64. Therefore,
+# by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
+RUN go build -o bin/daemonset cmd/daemonset/main.go
+
+FROM nvidia/cuda:12.4.1-base-ubuntu22.04
+
+# Remove CUDA libs(compat etc) in favor of libs installed by the NVIDIA driver
+RUN rm -f cuda-*.deb
+RUN apt-get --purge -y autoremove cuda-*
+
+ENV NVIDIA_DISABLE_REQUIRE="true"
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+
+WORKDIR /
+
+COPY --from=build /workspace/bin/daemonset .
+
+# Install / upgrade packages here that are required to resolve CVEs
+ARG CVE_UPDATES
+RUN if [ -n "${CVE_UPDATES}" ]; then \
+        rm -f /etc/apt/sources.list.d/cuda.list && \
+        apt-get update && apt-get upgrade -y ${CVE_UPDATES} && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
+ENTRYPOINT ["/daemonset"]

@@ -1,6 +1,6 @@
-
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+IMG ?= asm582/instaslicev2-controller:latest
+IMG_DMST ?= asm582/instaslicev2-daemonset:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.29.0
 
@@ -21,6 +21,14 @@ CONTAINER_TOOL ?= docker
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
+
+# GOOS?=linux
+# GOARCH?=arm64
+# CGO_ENABLED?=0
+# CLI_VERSION_PACKAGE := main
+# COMMIT ?= $(shell git describe --dirty --long --always --abbrev=15)
+# CGO_LDFLAGS_ALLOW := "-Wl,--unresolved-symbols=ignore-in-object-files"
+# LDFLAGS_COMMON := "-s -w -X $(CLI_VERSION_PACKAGE).commitSha=$(COMMIT) -X $(CLI_VERSION_PACKAGE).version=$(VERSION)
 
 .PHONY: all
 all: build
@@ -81,22 +89,28 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
-	go build -o bin/manager cmd/main.go
+	go build -o bin/manager cmd/controller/main.go
+	go build -o bin/daemonset cmd/daemonset/main.go
+.PHONY: run-controller
+run-controller: manifests generate fmt vet ## Run a controller from your host.
+	sudo -E go run ./cmd/controller/main.go 
 
-.PHONY: run
-run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/main.go
+.PHONY: run-daemonset
+run-daemonset: manifests generate fmt vet ## Run a controller from your host.
+	sudo -E go run ./cmd/daemonset/main.go 
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
+	$(CONTAINER_TOOL) build -t ${IMG} -f Dockerfile.controller .
+	$(CONTAINER_TOOL) build -t ${IMG_DMST} -f Dockerfile.daemonset .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
+	$(CONTAINER_TOOL) push ${IMG_DMST}
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
@@ -118,12 +132,8 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	@if [ -d "config/crd" ]; then \
-		$(KUSTOMIZE) build config/crd > dist/install.yaml; \
-	fi
-	echo "---" >> dist/install.yaml  # Add a document separator before appending
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default >> dist/install.yaml
+	$(KUSTOMIZE) build config/default > dist/install.yaml
 
 ##@ Deployment
 
@@ -143,6 +153,11 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 	$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
+
+# .PHONY: deploy-daemonset
+# deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+# 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG_DMST}
+# 	$(KUSTOMIZE) build config/daemonset | $(KUBECTL) apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
@@ -165,7 +180,7 @@ GOLANGCI_LINT = $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.3.0
 CONTROLLER_TOOLS_VERSION ?= v0.14.0
-ENVTEST_VERSION ?= latest
+ENVTEST_VERSION ?= release-0.17
 GOLANGCI_LINT_VERSION ?= v1.54.2
 
 .PHONY: kustomize

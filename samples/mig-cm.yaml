@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cuda-config
+data:
+  NVIDIA_VISIBLE_DEVICES: "MIG-312910f7-3057-529d-83c3-9e5b0b8cb10a"
+  CUDA_VISIBLE_DEVICES: "MIG-312910f7-3057-529d-83c3-9e5b0b8cb10a"

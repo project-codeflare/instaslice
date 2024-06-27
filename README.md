@@ -1,201 +1,306 @@
+# Note - Kubecon EU 2024 code (DRA code) is now available in the legacy branch
+
 # InstaSlice
 
-InstaSlice facilitates the use of [Dynamic Resource
-Allocation](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/)
-(DRA) on Kubernetes clusters for GPU sharing.
+Experimental InstaSlice works with GPU operator to create mig slices on demand.
 
-For its initial release, InstaSlice facilitates the allocation of [MIG
-slices](https://www.nvidia.com/en-us/technologies/multi-instance-gpu/) on
-[NVIDIA A100 GPUs](https://www.nvidia.com/en-us/data-center/a100/). InstaSlice
-makes it possible to deploy pods with MIG slice requirements expressed as
-[extended
-resources](https://kubernetes.io/docs/tasks/configure-pod-container/extended-resource/)
-to a DRA-enabled cluster. In particular, it enables cluster administrators to
-transparently replace [MIG
-manager](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cloud-native/containers/k8s-mig-manager)
-from [NVIDIA GPU
-operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/index.html)
-with [NVIDIA DRA driver](https://github.com/NVIDIA/k8s-dra-driver) without
-requiring changes to pod specs.
 
-See this [demonstration](demo) for a detailed comparison of MIG slicing using MIG manager
-vs. DRA driver vs. InstaSlice.
+## Getting Started
 
-## Description
+### Prerequisites
+- go version v1.22.0+
+- docker version 17.03+.
+- kubectl version v1.11.3+.
+- Access to a KinD cluster.
 
-InstaSlice implements a mutating webhook for pods that automatically rewrites
-resource limits on containers into DRA [resource
-claims](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/#api).
-For instance, InstaSlice rewrites at creation time the following pod spec:
+### Install KinD cluster with GPU operator
 
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: sample
-spec:
-  restartPolicy: Never
-  containers:
-  - name: busybox
-    image: quay.io/project-codeflare/busybox:1.36
-    command: ["sh", "-c", "sleep 5"]
-    resources:
-      limits:
-        nvidia.com/mig-1g.5gb: 1
-```
-into the following pod spec:
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: sample
-spec:
-  containers:
-  restartPolicy: Never
-  containers:
-  - name: busybox
-    image: quay.io/project-codeflare/busybox:1.36
-    command: ["sh", "-c", "sleep 5"]
-    resources:
-      claims:
-      - name: ae9a7e7e-e955-4870-859c-12b83927b2bd
-  resourceClaims:
-  - name: ae9a7e7e-e955-4870-859c-12b83927b2bd
-    source:
-      resourceClaimTemplateName: mig-1g.5gb
-```
-
-The latter spec assumes the following resource claim templates and parameters
-are already deployed to the pod namespace:
-```yaml
-apiVersion: gpu.resource.nvidia.com/v1alpha1
-kind: MigDeviceClaimParameters
-metadata:
-  name: mig-1g.5gb
-spec:
-  profile: 1g.5gb
----
-apiVersion: resource.k8s.io/v1alpha2
-kind: ResourceClaimTemplate
-metadata:
-  name: mig-1g.5gb
-spec:
-  spec:
-    resourceClassName: gpu.nvidia.com
-    parametersRef:
-      apiGroup: gpu.resource.nvidia.com
-      kind: MigDeviceClaimParameters
-      name: mig-1g.5gb
-```
-The deployment instructions below cover this prerequisite.
-
-## Getting started
-
-### Configuring a Kubernetes cluster
-
-InstaSlice assumes a DRA-enabled Kubernetes cluster. It has been tested against
-Kubernetes v1.27.
-
-For development or testing purposes, InstaSlice can run on a cluster without
-GPUs with a minimal configuration (option 1). In order run pods on MIG slices, a
-GPU-enabled, DRA-enabled cluster running the NVIDIA DRA driver is necessary
-(option 2).
-
-#### Option 1: test cluster without GPUs
-
-A cluster capable of running InstaSlice can be obtained using
-[kind](https://kind.sigs.k8s.io) v0.19 with the provided cluster
-[configuration](hack/kind-config.yaml).
+- Run the below script
 ```sh
-kind create cluster --config hack/kind-config.yaml
+./setup.sh
 ```
+NOTE: Please check if all the pods in GPU operator are completed or Running before moving to the next step.
 
-InstaSlice assumes CRDs from the [NDIVIA DRA
-driver](https://github.com/NVIDIA/k8s-dra-driver) are installed on the cluster:
 ```sh
-kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-dra-driver/b6c7aae2b87d857668f417689462da752090406f/deployments/helm/k8s-dra-driver/crds/gpu.resource.nvidia.com_migdeviceclaimparameters.yaml
+(base) openstack@netsres62:~/asmalvan/instaslice2$ kubectl get pods -n gpu-operator
+NAME                                                              READY   STATUS      RESTARTS   AGE
+gpu-feature-discovery-578q8                                       1/1     Running     0          102s
+gpu-operator-1714053627-node-feature-discovery-gc-9b857c99phlnn   1/1     Running     0          7m21s
+gpu-operator-1714053627-node-feature-discovery-master-6df78zgsz   1/1     Running     0          7m21s
+gpu-operator-1714053627-node-feature-discovery-worker-47tpx       1/1     Running     0          7m19s
+gpu-operator-54b8bfbfd8-rmzbd                                     1/1     Running     0          7m21s
+nvidia-container-toolkit-daemonset-wkc5h                          1/1     Running     0          6m21s
+nvidia-cuda-validator-cn8lg                                       0/1     Completed   0          88s
+nvidia-dcgm-exporter-h75xg                                        1/1     Running     0          102s
+nvidia-device-plugin-daemonset-452dk                              1/1     Running     0          101s
+nvidia-mig-manager-htt7z                                          1/1     Running     0          2m21s
+nvidia-operator-validator-kh6jf                                   1/1     Running     0          102s
 ```
 
-On such a cluster, InstaSlice will be able to rewrite pod specs, but of course
-the cluster will be unable to satisfy GPU resource claims. Pods will remain
-forever pending.
+- After all the pods are Running/Completed, run nvidia-smi on the host and check if MIG slices appear on the all the GPUs of the host.
 
-#### Option 2: GPU-enabled cluster
-
-In order to dynamically create and destroy MIG slices on NVIDIA GPUs, a
-GPU-enabled, DRA-enabled cluster running the NVIDIA DRA driver is necessary.
-Please refer to
-[https://github.com/NVIDIA/k8s-dra-driver](https://github.com/NVIDIA/k8s-dra-driver/tree/b6c7aae2b87d857668f417689462da752090406f)
-for further instructions. Please note that InstaSlice has been developed and
-tested against commit `b6c7aae` of this driver.
-
-### Deploying cert-manager
-
-InstaSlice assumes [cert-manager](https://github.com/cert-manager/cert-manager)
-is deployed on the cluster:
 ```sh
-kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.3/cert-manager.yaml
+(base) openstack@netsres62:~/asmalvan/instaslice2$ nvidia-smi
+Thu Apr 25 10:08:24 2024       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 550.54.14              Driver Version: 550.54.14      CUDA Version: 12.4     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A100-PCIE-40GB          Off |   00000000:0E:00.0 Off |                   On |
+| N/A   45C    P0             71W /  250W |      87MiB /  40960MiB |     N/A      Default |
+|                                         |                        |              Enabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA A100-PCIE-40GB          Off |   00000000:0F:00.0 Off |                   On |
+| N/A   49C    P0             69W /  250W |      87MiB /  40960MiB |     N/A      Default |
+|                                         |                        |              Enabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| MIG devices:                                                                            |
++------------------+----------------------------------+-----------+-----------------------+
+| GPU  GI  CI  MIG |                     Memory-Usage |        Vol|      Shared           |
+|      ID  ID  Dev |                       BAR1-Usage | SM     Unc| CE ENC DEC OFA JPG    |
+|                  |                                  |        ECC|                       |
+|==================+==================================+===========+=======================|
+|  0    2   0   0  |              37MiB / 19968MiB    | 42      0 |  3   0    2    0    0 |
+|                  |                 0MiB / 32767MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  0    3   0   1  |              25MiB /  9856MiB    | 28      0 |  2   0    1    0    0 |
+|                  |                 0MiB / 16383MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  0    9   0   2  |              12MiB /  4864MiB    | 14      0 |  1   0    0    0    0 |
+|                  |                 0MiB /  8191MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  0   10   0   3  |              12MiB /  4864MiB    | 14      0 |  1   0    0    0    0 |
+|                  |                 0MiB /  8191MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  1    2   0   0  |              37MiB / 19968MiB    | 42      0 |  3   0    2    0    0 |
+|                  |                 0MiB / 32767MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  1    3   0   1  |              25MiB /  9856MiB    | 28      0 |  2   0    1    0    0 |
+|                  |                 0MiB / 16383MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  1    9   0   2  |              12MiB /  4864MiB    | 14      0 |  1   0    0    0    0 |
+|                  |                 0MiB /  8191MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  1   10   0   3  |              12MiB /  4864MiB    | 14      0 |  1   0    0    0    0 |
+|                  |                 0MiB /  8191MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+(base) openstack@netsres62:~/asmalvan/instaslice2$ 
 ```
 
-### Building InstaSlice
+- Get the installed GPU operator name using command
 
-A prebuilt InstaSlice image is available from
-[quay.io/ibm/instaslice](https://quay.io/repository/ibm/instaslice).
-
-To build and push an InstaSlice image run:
 ```sh
-make docker-build docker-push IMG=<some-registry>/instaslice:<some-tag>
+helm list --all-namespaces
+(base) openstack@netsres62:~/asmalvan/instaslice2$ helm list --all-namespaces
+NAME                    NAMESPACE       REVISION        UPDATED                                 STATUS          CHART                   APP VERSION
+gpu-operator-1714053627 gpu-operator    1               2024-04-25 10:00:30.933618302 -0400 EDT deployed        gpu-operator-v23.9.2    v23.9.2 
 ```
 
-Alternatively, to build and push a multi-architecture InstaSlice image run:
+- Use the helm deployment name and disbale mig manager using command
+
 ```sh
-make docker-buildx IMG=<some-registry>/instaslice:<some-tag>
+helm upgrade gpu-operator-<your-gpu-op-dep> nvidia/gpu-operator -n gpu-operator --reuse-values --set migManager.enabled=false
 ```
+- Verify that mig manager pod do not exists in GPU operator namespace using command
 
-## Running InstaSlice on the cluster
-
-To deploy InstaSlice on the Kubernetes cluster, run the prebuilt image or your
-own by replacing the image name below:
 ```sh
-make deploy IMG=quay.io/ibm/instaslice:latest
+kubectl get pods -n gpu-operator
+(base) openstack@netsres62:~/asmalvan/instaslice2$ kubectl get pods -n gpu-operator
+NAME                                                              READY   STATUS      RESTARTS   AGE
+gpu-feature-discovery-578q8                                       1/1     Running     0          3m43s
+gpu-operator-1714053627-node-feature-discovery-gc-9b857c99phlnn   1/1     Running     0          9m22s
+gpu-operator-1714053627-node-feature-discovery-master-6df78zgsz   1/1     Running     0          9m22s
+gpu-operator-1714053627-node-feature-discovery-worker-47tpx       1/1     Running     0          9m20s
+gpu-operator-54b8bfbfd8-rmzbd                                     1/1     Running     0          9m22s
+nvidia-container-toolkit-daemonset-wkc5h                          1/1     Running     0          8m22s
+nvidia-cuda-validator-cn8lg                                       0/1     Completed   0          3m29s
+nvidia-dcgm-exporter-h75xg                                        1/1     Running     0          3m43s
+nvidia-device-plugin-daemonset-452dk                              1/1     Running     0          3m42s
+nvidia-operator-validator-kh6jf                                   1/1     Running     0          3m43s
 ```
+- Delete mig slices using the commmand
 
-InstaSlice relies on preconfigured [resource claim
-templates](hack/mig-profiles.yaml). These templates must be deployed to each
-namespace where pods using InstaSlice will be deployed.
-
-To deploy the templates to a given namespace run:
 ```sh
-kubectl apply -f hack/mig-profiles.yaml --namespace <some-namespace>
+sudo nvidia-smi mig -dci && sudo nvidia-smi mig -dgi
+
+uccessfully destroyed compute instance ID  0 from GPU  0 GPU instance ID  9
+Successfully destroyed compute instance ID  0 from GPU  0 GPU instance ID 10
+Successfully destroyed compute instance ID  0 from GPU  0 GPU instance ID  3
+Successfully destroyed compute instance ID  0 from GPU  0 GPU instance ID  2
+Successfully destroyed compute instance ID  0 from GPU  1 GPU instance ID  9
+Successfully destroyed compute instance ID  0 from GPU  1 GPU instance ID 10
+Successfully destroyed compute instance ID  0 from GPU  1 GPU instance ID  3
+Successfully destroyed compute instance ID  0 from GPU  1 GPU instance ID  2
+Successfully destroyed GPU instance ID  9 from GPU  0
+Successfully destroyed GPU instance ID 10 from GPU  0
+Successfully destroyed GPU instance ID  3 from GPU  0
+Successfully destroyed GPU instance ID  2 from GPU  0
+Successfully destroyed GPU instance ID  9 from GPU  1
+Successfully destroyed GPU instance ID 10 from GPU  1
+Successfully destroyed GPU instance ID  3 from GPU  1
+Successfully destroyed GPU instance ID  2 from GPU  1
 ```
 
-### Running an example pod
+- Create placeholder slice to make k8s-device-plugin happy using the command
 
-To deploy an [example pod](samples/sample.yaml) on the cluster run:
 ```sh
-kubectl apply -f samples/sample.yaml
+sudo nvidia-smi mig -cgi 3g.20gb -C
+Successfully created GPU instance ID  2 on GPU  0 using profile MIG 3g.20gb (ID  9)
+Successfully created compute instance ID  0 on GPU  0 GPU instance ID  2 using profile MIG 3g.20gb (ID  2)
+Successfully created GPU instance ID  2 on GPU  1 using profile MIG 3g.20gb (ID  9)
+Successfully created compute instance ID  0 on GPU  1 GPU instance ID  2 using profile MIG 3g.20gb (ID  2)
 ```
 
-Check the resulting pod spec using:
+- Now delete the device-plugin pod using command
+
 ```sh
-kubectl get -o yaml pod sample
+(base) openstack@netsres62:~/asmalvan/instaslice2$ kubectl delete pod nvidia-device-plugin-daemonset-452dk  -n gpu-operator
+pod "nvidia-device-plugin-daemonset-452dk" deleted
 ```
 
-Delete the pod with:
+You are now all set to dynamically create slices on the cluster using InstaSlice.
+
+### Running the controller locally
+
+- Install InstaSlice CRD on the cluster
+
 ```sh
-kubectl delete -f samples/sample.yaml
+make install
 ```
 
-### Uninstalling InstaSlice from the cluster
+- Make sure you have sudo access, run the following command
 
-To uninstall InstaSlice from the cluster run:
+```sh
+make run
+```
+
+### Submitting the workload
+
+- Submit a sample workload using the command
+
+```sh
+kubectl apply -f ./samples/test-pod.yaml
+pod/cuda-vectoradd-2 created
+```
+
+- check the status of the workload using commands
+
+```sh
+kubectl get pods
+NAME               READY   STATUS    RESTARTS   AGE
+cuda-vectoradd-2   1/1     Running   0          15s
+kubectl logs cuda-vectoradd-2
+GPU 0: NVIDIA A100-PCIE-40GB (UUID: GPU-31cfe05c-ed13-cd17-d7aa-c63db5108c24)
+  MIG 1g.5gb      Device  0: (UUID: MIG-c5720b34-e550-5278-90e6-d99a979aafd1)
+[Vector addition of 50000 elements]
+Copy input data from the host memory to the CUDA device
+CUDA kernel launch with 196 blocks of 256 threads
+Copy output data from the CUDA device to the host memory
+Test PASSED
+Done
+
+```
+### To Deploy on the cluster
+
+**Build and push your image to the location specified by `IMG`:**
+
+```sh
+make docker-build docker-push IMG=<some-registry>/instaslicev2:tag
+```
+
+**NOTE:** This image ought to be published in the personal registry you specified.
+And it is required to have access to pull the image from the working environment.
+Make sure you have the proper permission to the registry if the above commands don’t work.
+
+**Install the CRDs into the cluster:**
+
+```sh
+make install
+```
+
+**Deploy the Manager to the cluster with the image specified by `IMG`:**
+
+```sh
+make deploy IMG=<some-registry>/instaslicev2:tag
+```
+
+> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
+privileges or be logged in as admin.
+
+**Create instances of your solution**
+You can apply the samples (examples) from the config/sample:
+
+```sh
+kubectl apply -k config/samples/
+```
+
+>**NOTE**: Ensure that the samples has default values to test it out.
+
+### To Uninstall
+**Delete the instances (CRs) from the cluster:**
+
+```sh
+kubectl delete -k config/samples/
+```
+
+**Delete the APIs(CRDs) from the cluster:**
+
+```sh
+make uninstall
+```
+
+**UnDeploy the controller from the cluster:**
+
 ```sh
 make undeploy
 ```
 
+## Project Distribution
+
+Following are the steps to build the installer and distribute this project to users.
+
+1. Build the installer for the image built and published in the registry:
+
+```sh
+make build-installer IMG=<some-registry>/instaslicev2:tag
+```
+
+NOTE: The makefile target mentioned above generates an 'install.yaml'
+file in the dist directory. This file contains all the resources built
+with Kustomize, which are necessary to install this project without
+its dependencies.
+
+2. Using the installer
+
+Users can just run kubectl apply -f <URL for YAML BUNDLE> to install the project, i.e.:
+
+```sh
+kubectl apply -f https://raw.githubusercontent.com/<org>/instaslicev2/<tag or branch>/dist/install.yaml
+```
+
+## Contributing
+// TODO(user): Add detailed information on how you would like others to contribute to this project
+
+**NOTE:** Run `make help` for more information on all potential `make` targets
+
+More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+
 ## License
 
-Copyright 2024 IBM Corporation.
+Copyright 2024.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

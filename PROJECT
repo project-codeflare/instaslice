@@ -5,12 +5,16 @@
 domain: codeflare.dev
 layout:
 - go.kubebuilder.io/v4
-projectName: instaslice
-repo: github.com/project-codeflare/instaslice
+projectName: instaslicev2
+repo: codeflare.dev/instaslice
 resources:
-- kind: Pod
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: codeflare.dev
+  group: inference
+  kind: Instaslice
+  path: codeflare.dev/instaslice/api/v1
   version: v1
-  webhooks:
-    defaulting: true
-    webhookVersion: v1
 version: "3"

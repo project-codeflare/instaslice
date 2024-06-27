@@ -1,5 +1,5 @@
 /*
-Copyright 2024 IBM Corporation.
+Copyright 2024.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,6 +27,6 @@ import (
 // Run e2e tests using the Ginkgo runner.
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
-	fmt.Fprintf(GinkgoWriter, "Starting instaslice suite\n")
+	fmt.Fprintf(GinkgoWriter, "Starting instaslicev2 suite\n")
 	RunSpecs(t, "e2e suite")
 }

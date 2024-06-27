@@ -1,5 +1,5 @@
 /*
-Copyright 2024 IBM Corporation.
+Copyright 2024.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,10 +24,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/project-codeflare/instaslice/test/utils"
+	"codeflare.dev/instaslice/test/utils"
 )
 
-const namespace = "instaslice-system"
+const namespace = "instaslicev2-system"
 
 var _ = Describe("controller", Ordered, func() {
 	BeforeAll(func() {
@@ -60,7 +60,7 @@ var _ = Describe("controller", Ordered, func() {
 			var err error
 
 			// projectimage stores the name of the image used in the example
-			var projectimage = "example.com/instaslice:v0.0.1"
+			var projectimage = "example.com/instaslicev2:v0.0.1"
 
 			By("building the manager(Operator) image")
 			cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectimage))
