@@ -4,7 +4,6 @@
 
 Experimental InstaSlice works with GPU operator to create mig slices on demand.
 
-
 ## Getting Started
 
 ### Prerequisites
@@ -109,27 +108,6 @@ NAME                    NAMESPACE       REVISION        UPDATED                 
 gpu-operator-1714053627 gpu-operator    1               2024-04-25 10:00:30.933618302 -0400 EDT deployed        gpu-operator-v23.9.2    v23.9.2 
 ```
 
-- Use the helm deployment name and disbale mig manager using command
-
-```sh
-helm upgrade gpu-operator-<your-gpu-op-dep> nvidia/gpu-operator -n gpu-operator --reuse-values --set migManager.enabled=false
-```
-- Verify that mig manager pod do not exists in GPU operator namespace using command
-
-```sh
-kubectl get pods -n gpu-operator
-(base) openstack@netsres62:~/asmalvan/instaslice2$ kubectl get pods -n gpu-operator
-NAME                                                              READY   STATUS      RESTARTS   AGE
-gpu-feature-discovery-578q8                                       1/1     Running     0          3m43s
-gpu-operator-1714053627-node-feature-discovery-gc-9b857c99phlnn   1/1     Running     0          9m22s
-gpu-operator-1714053627-node-feature-discovery-master-6df78zgsz   1/1     Running     0          9m22s
-gpu-operator-1714053627-node-feature-discovery-worker-47tpx       1/1     Running     0          9m20s
-gpu-operator-54b8bfbfd8-rmzbd                                     1/1     Running     0          9m22s
-nvidia-container-toolkit-daemonset-wkc5h                          1/1     Running     0          8m22s
-nvidia-cuda-validator-cn8lg                                       0/1     Completed   0          3m29s
-nvidia-dcgm-exporter-h75xg                                        1/1     Running     0          3m43s
-nvidia-device-plugin-daemonset-452dk                              1/1     Running     0          3m42s
-nvidia-operator-validator-kh6jf                                   1/1     Running     0          3m43s
 ```
 - Delete mig slices using the commmand
 
