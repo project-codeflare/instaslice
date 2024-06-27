@@ -12,12 +12,4 @@ data:
     version: v1
     flags:
       migStrategy: mixed
-#install GPU operator with setup.sh script
-#create config map
-#kubectl apply -f /home/openstack/asmalvan/instaslice2/custom-transformed_1.yaml
-#for already deployed GPU operator
-#kubectl patch clusterpolicies.nvidia.com/cluster-policy     -n gpu-operator --type merge     -p '{"spec": {"devicePlugin": {"config": {"name": "test"}}}}'
-#create new slice
-#sudo nvidia-smi mig -cgi 7g.40gb -C
-#overwrite node labe
-#kubectl label node kind-control-plane  nvidia.com/device-plugin.config=a100-40gb-1 --overwrite=true
+

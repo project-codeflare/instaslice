@@ -164,13 +164,16 @@ Successfully created GPU instance ID  2 on GPU  1 using profile MIG 3g.20gb (ID 
 Successfully created compute instance ID  0 on GPU  1 GPU instance ID  2 using profile MIG 3g.20gb (ID  2)
 ```
 
-- Now delete the device-plugin pod using command
+- Run the below command to patch device plugin with configmap created by the setup script. For OpenShift replace clusterpolicies.nvidia.com/cluster-policy to clusterpolicies.nvidia.com/gpu-cluster-policy and namespace to nvidia-gpu-operator
 
 ```sh
-(base) openstack@netsres62:~/asmalvan/instaslice2$ kubectl delete pod nvidia-device-plugin-daemonset-452dk  -n gpu-operator
-pod "nvidia-device-plugin-daemonset-452dk" deleted
+(base) openstack@netsres62:~/asmalvan/instaslice2$ kubectl patch clusterpolicies.nvidia.com/cluster-policy     -n gpu-operator --type merge     -p '{"spec": {"devicePlugin": {"config": {"name": "test"}}}}'
 ```
+- Label (ideally worker nodes) in the cluster to watch the configmap
 
+```sh
+kubectl label node --all nvidia.com/device-plugin.config=a100-40gb
+```
 You are now all set to dynamically create slices on the cluster using InstaSlice.
 
 ### Running the controller locally
@@ -218,7 +221,7 @@ Done
 **Build and push your image to the location specified by `IMG`:**
 
 ```sh
-make docker-build docker-push IMG=<some-registry>/instaslicev2:tag
+make docker-build docker-push IMG=<some-registry>/instaslice:tag
 ```
 
 **NOTE:** This image ought to be published in the personal registry you specified.
@@ -234,7 +237,7 @@ make install
 **Deploy the Manager to the cluster with the image specified by `IMG`:**
 
 ```sh
-make deploy IMG=<some-registry>/instaslicev2:tag
+make deploy IMG=<some-registry>/instaslice:tag
 ```
 
 > **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
@@ -275,7 +278,7 @@ Following are the steps to build the installer and distribute this project to us
 1. Build the installer for the image built and published in the registry:
 
 ```sh
-make build-installer IMG=<some-registry>/instaslicev2:tag
+make build-installer IMG=<some-registry>/instaslice:tag
 ```
 
 NOTE: The makefile target mentioned above generates an 'install.yaml'
@@ -288,7 +291,7 @@ its dependencies.
 Users can just run kubectl apply -f <URL for YAML BUNDLE> to install the project, i.e.:
 
 ```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/instaslicev2/<tag or branch>/dist/install.yaml
+kubectl apply -f https://raw.githubusercontent.com/<org>/instaslice/<tag or branch>/dist/install.yaml
 ```
 
 ## Contributing
