@@ -26,6 +26,7 @@ import (
 
 	inferencev1 "codeflare.dev/instaslice/api/v1"
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
+	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -89,6 +90,7 @@ const (
 
 func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
+	logger := log.Log.WithName("InstaSlice-controller")
 
 	pod := &v1.Pod{}
 	//var podName string
@@ -99,20 +101,16 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 			return ctrl.Result{}, nil
 		}
 		// Error fetching the Pod
-		log.Log.Info("Error in fetching the latest version of the pod")
+		logger.Info("Error in fetching the latest version of the pod")
 		return ctrl.Result{}, nil
 	}
 
 	if pod.Labels["processedbydeamonset"] == "true" && !pod.DeletionTimestamp.IsZero() {
 		fmt.Printf("Deleted pod %v", pod.Name)
-		ret := nvml.Init()
-		if ret != nvml.SUCCESS {
-			fmt.Printf("Unable to initialize NVML: %v \n", nvml.ErrorString(ret))
-		}
 
 		// Path to the file containing the node name
 		// Iterate over the allocations and delete the specific one
-		r.cleanUp(ctx, pod)
+		r.cleanUp(ctx, pod, logger)
 	}
 
 	//check if pod is already processed by daemonset.
@@ -216,15 +214,11 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 			if retCodeForGiWithPlacement != nvml.SUCCESS {
 				fmt.Printf("error creating GPU instance for '%v': %v \n ", &giProfileInfo, retCodeForGiWithPlacement)
 			}
-
 			giInfo, retForGiInfor := gi.GetInfo()
 			if retForGiInfor != nvml.SUCCESS {
 				fmt.Printf("error getting GPU instance info for '%v': %v \n", &giProfileInfo, retForGiInfor)
 			}
 			giId = giInfo.Id
-			uu, _ := giInfo.Device.GetUUID()
-			fmt.Printf("The uuid is %v\n", uu)
-			fmt.Printf("The giInfo is %v \n", giInfo)
 			//TODO: figure out the compute slice scenario, I think Kubernetes does not support this use case yet
 			ciProfileInfo, retCodeForCiProfile := gi.GetComputeInstanceProfileInfo(Ciprofileid, CiEngProfileid)
 			if retCodeForCiProfile != nvml.SUCCESS {
@@ -353,7 +347,11 @@ func (r *InstaSliceDaemonsetReconciler) getAllocation(ctx context.Context, insta
 	return deviceForMig, profileName, Giprofileid, Ciprofileid, CiEngProfileid
 }
 
-func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, pod *v1.Pod) {
+func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, pod *v1.Pod, logger logr.Logger) {
+	ret := nvml.Init()
+	if ret != nvml.SUCCESS {
+		logger.Error(ret, "Unable to initialize NVML")
+	}
 	var instasliceList inferencev1.InstasliceList
 	if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
 		fmt.Printf("Error listing Instaslice %v", err)
@@ -366,12 +364,28 @@ func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, pod *v1.Pod
 			var candidateDel string
 			for migUUID, value := range prepared {
 				if value.PodUUID == string(pod.UID) {
-					parent, _ := nvml.DeviceGetHandleByUUID(value.Parent)
-					gi, _ := parent.GetGpuInstanceById(int(value.Giinfoid))
-					ci, _ := gi.GetComputeInstanceById(int(value.Ciinfoid))
-					ci.Destroy()
-					gi.Destroy()
+					parent, errRecievingDeviceHandle := nvml.DeviceGetHandleByUUID(value.Parent)
+					if errRecievingDeviceHandle != nvml.SUCCESS {
+						logger.Error(errRecievingDeviceHandle, "Error obtaining GPU handle")
+					}
+					gi, errRetrievingGi := parent.GetGpuInstanceById(int(value.Giinfoid))
+					if errRetrievingGi != nvml.SUCCESS {
+						logger.Error(errRetrievingGi, "Error obtaining GPU instance")
+					}
+					ci, errRetrievingCi := gi.GetComputeInstanceById(int(value.Ciinfoid))
+					if errRetrievingCi != nvml.SUCCESS {
+						logger.Error(errRetrievingCi, "Error obtaining Compute instance")
+					}
+					errDestroyingCi := ci.Destroy()
+					if errDestroyingCi != nvml.SUCCESS {
+						logger.Error(errDestroyingCi, "Error deleting Compute instance")
+					}
+					errDestroyingGi := gi.Destroy()
+					if errDestroyingGi != nvml.SUCCESS {
+						logger.Error(errDestroyingGi, "Error deleting GPU instance")
+					}
 					candidateDel = migUUID
+					logger.Info("Done deleting MIG slice for pod", "UUID", value.PodUUID)
 				}
 			}
 			delete(instaslice.Spec.Prepared, candidateDel)
@@ -383,7 +397,10 @@ func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, pod *v1.Pod
 					break
 				}
 			}
-			r.Update(ctx, &instaslice)
+			err := r.Update(ctx, &instaslice)
+			if err != nil {
+				logger.Error(err, "Error updating InstasSlice object")
+			}
 			r.updateNodeCapacity(ctx, nodeName)
 		}
 	}

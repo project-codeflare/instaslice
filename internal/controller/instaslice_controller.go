@@ -70,7 +70,7 @@ type FirstFitPolicy struct{}
 
 func (r *InstasliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
-	logger := log.Log.WithName("controller-name")
+	logger := log.Log.WithName("InstaSlice-controller")
 	var policy AllocationPolicy
 	policy = &FirstFitPolicy{}
 	pod := &v1.Pod{}
