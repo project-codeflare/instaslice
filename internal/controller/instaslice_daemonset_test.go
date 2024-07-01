@@ -18,67 +18,106 @@ package controller
 
 import (
 	"context"
+	"os"
+	"testing"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"github.com/NVIDIA/go-nvml/pkg/nvml"
+	"github.com/NVIDIA/go-nvml/pkg/nvml/mock/dgxa100"
+	"github.com/go-logr/logr/testr"
+	"github.com/stretchr/testify/assert"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes/scheme"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	inferencev1 "codeflare.dev/instaslice/api/v1"
+	runtimefake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-var _ = Describe("Instaslice Daemonset", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+func TestCleanUp(t *testing.T) {
+	// Set up the mock server
+	server := dgxa100.New()
 
-		ctx := context.Background()
-
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+	// Mock the NVML functions
+	nvml.Init = func() nvml.Return {
+		return nvml.SUCCESS
+	}
+	nvml.Shutdown = func() nvml.Return {
+		return nvml.SUCCESS
+	}
+	nvml.DeviceGetHandleByUUID = func(uuid string) (nvml.Device, nvml.Return) {
+		for _, dev := range server.Devices {
+			device := dev.(*dgxa100.Device)
+			if device.UUID == uuid {
+				return device, nvml.SUCCESS
+			}
 		}
-		instaslice := &inferencev1.Instaslice{}
+		return nil, nvml.ERROR_NOT_FOUND
+	}
 
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind Instaslice")
-			err := k8sClient.Get(ctx, typeNamespacedName, instaslice)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &inferencev1.Instaslice{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
-		})
+	// Create a fake Kubernetes client
+	s := scheme.Scheme
+	_ = inferencev1.AddToScheme(s)
+	fakeClient := runtimefake.NewClientBuilder().WithScheme(s).Build()
 
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &inferencev1.Instaslice{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
+	// Create a fake kubernetes clientset
 
-			By("Cleanup the specific resource instance Instaslice")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &InstasliceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
+	//fakeKubeClient := fake.NewSimpleClientset()
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
-		})
-	})
-})
+	// Create an InstaSliceDaemonsetReconciler
+	reconciler := &InstaSliceDaemonsetReconciler{
+		Client: fakeClient,
+		Scheme: s,
+	}
+	// Create a fake Instaslice resource
+	instaslice := &inferencev1.Instaslice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "node-1",
+		},
+		Spec: inferencev1.InstasliceSpec{
+			Prepared: map[string]inferencev1.PreparedDetails{
+				"mig-uuid-1": {
+					PodUUID:  "pod-uid-1",
+					Parent:   "GPU-1",
+					Giinfoid: 1,
+					Ciinfoid: 1,
+				},
+			},
+			Allocations: map[string]inferencev1.AllocationDetails{
+				"allocation-1": {
+					PodUUID:   "pod-uid-1",
+					PodName:   "pod-name-1",
+					Namespace: "default",
+				},
+			},
+		},
+	}
+	fakeClient.Create(context.Background(), instaslice)
+
+	// Set the NODE_NAME environment variable
+	os.Setenv("NODE_NAME", "node-1")
+	defer os.Unsetenv("NODE_NAME")
+
+	// Create a fake Pod resource
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:       "pod-uid-1",
+			Name:      "pod-name-1",
+			Namespace: "default",
+		},
+	}
+
+	// Create a logger
+	logger := testr.New(t)
+
+	// Call the cleanUp function
+	reconciler.cleanUp(context.Background(), pod, logger)
+
+	// Verify the Instaslice resource was updated
+	var updatedInstaslice inferencev1.Instaslice
+	err := fakeClient.Get(context.Background(), types.NamespacedName{Name: "node-1"}, &updatedInstaslice)
+	assert.NoError(t, err)
+	assert.Empty(t, updatedInstaslice.Spec.Prepared)
+	assert.Empty(t, updatedInstaslice.Spec.Allocations)
+}
