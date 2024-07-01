@@ -14,9 +14,46 @@ Experimental InstaSlice works with GPU operator to create mig slices on demand.
 
 ### Install KinD cluster with GPU operator
 
+- Make sure the GPUs on the host have MIG enabled
+
+```sh
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 550.54.14              Driver Version: 550.54.14      CUDA Version: 12.4     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A100-PCIE-40GB          Off |   00000000:0E:00.0 Off |                   On |
+| N/A   36C    P0             33W /  250W |       0MiB /  40960MiB |     N/A      Default |
+|                                         |                        |              Enabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA A100-PCIE-40GB          Off |   00000000:0F:00.0 Off |                   On |
+| N/A   40C    P0             32W /  250W |       0MiB /  40960MiB |     N/A      Default |
+|                                         |                        |              Enabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| MIG devices:                                                                            |
++------------------+----------------------------------+-----------+-----------------------+
+| GPU  GI  CI  MIG |                     Memory-Usage |        Vol|      Shared           |
+|      ID  ID  Dev |                       BAR1-Usage | SM     Unc| CE ENC DEC OFA JPG    |
+|                  |                                  |        ECC|                       |
+|==================+==================================+===========+=======================|
+|  No MIG devices found                                                                   |
++-----------------------------------------------------------------------------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
+```
+
 - Run the below script
 ```sh
-./setup.sh
+sh ./deploy/setup.sh
 ```
 NOTE: Please check if all the pods in GPU operator are completed or Running before moving to the next step.
 
@@ -99,16 +136,7 @@ Thu Apr 25 10:08:24 2024
 (base) openstack@netsres62:~/asmalvan/instaslice2$ 
 ```
 
-- Get the installed GPU operator name using command
 
-```sh
-helm list --all-namespaces
-(base) openstack@netsres62:~/asmalvan/instaslice2$ helm list --all-namespaces
-NAME                    NAMESPACE       REVISION        UPDATED                                 STATUS          CHART                   APP VERSION
-gpu-operator-1714053627 gpu-operator    1               2024-04-25 10:00:30.933618302 -0400 EDT deployed        gpu-operator-v23.9.2    v23.9.2 
-```
-
-```
 - Delete mig slices using the commmand
 
 ```sh
@@ -147,26 +175,12 @@ Successfully created compute instance ID  0 on GPU  1 GPU instance ID  2 using p
 ```sh
 (base) openstack@netsres62:~/asmalvan/instaslice2$ kubectl patch clusterpolicies.nvidia.com/cluster-policy     -n gpu-operator --type merge     -p '{"spec": {"devicePlugin": {"config": {"name": "test"}}}}'
 ```
-- Label (ideally worker nodes) in the cluster to watch the configmap
 
-```sh
-kubectl label node --all nvidia.com/device-plugin.config=a100-40gb
-```
 You are now all set to dynamically create slices on the cluster using InstaSlice.
 
-### Running the controller locally
+### Running the controller
 
-- Install InstaSlice CRD on the cluster
-
-```sh
-make install
-```
-
-- Make sure you have sudo access, run the following command
-
-```sh
-make run
-```
+- Refer to section `To Deploy on the cluster`
 
 ### Submitting the workload
 
@@ -174,7 +188,7 @@ make run
 
 ```sh
 kubectl apply -f ./samples/test-pod.yaml
-pod/cuda-vectoradd-2 created
+pod/cuda-vectoradd-5 created
 ```
 
 - check the status of the workload using commands
@@ -182,8 +196,8 @@ pod/cuda-vectoradd-2 created
 ```sh
 kubectl get pods
 NAME               READY   STATUS    RESTARTS   AGE
-cuda-vectoradd-2   1/1     Running   0          15s
-kubectl logs cuda-vectoradd-2
+cuda-vectoradd-5   1/1     Running   0          15s
+kubectl logs cuda-vectoradd-5
 GPU 0: NVIDIA A100-PCIE-40GB (UUID: GPU-31cfe05c-ed13-cd17-d7aa-c63db5108c24)
   MIG 1g.5gb      Device  0: (UUID: MIG-c5720b34-e550-5278-90e6-d99a979aafd1)
 [Vector addition of 50000 elements]
@@ -193,8 +207,100 @@ Copy output data from the CUDA device to the host memory
 Test PASSED
 Done
 
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 550.54.14              Driver Version: 550.54.14      CUDA Version: 12.4     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A100-PCIE-40GB          Off |   00000000:0E:00.0 Off |                   On |
+| N/A   52C    P0             75W /  250W |      50MiB /  40960MiB |     N/A      Default |
+|                                         |                        |              Enabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA A100-PCIE-40GB          Off |   00000000:0F:00.0 Off |                   On |
+| N/A   60C    P0             75W /  250W |      37MiB /  40960MiB |     N/A      Default |
+|                                         |                        |              Enabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| MIG devices:                                                                            |
++------------------+----------------------------------+-----------+-----------------------+
+| GPU  GI  CI  MIG |                     Memory-Usage |        Vol|      Shared           |
+|      ID  ID  Dev |                       BAR1-Usage | SM     Unc| CE ENC DEC OFA JPG    |
+|                  |                                  |        ECC|                       |
+|==================+==================================+===========+=======================|
+|  0    2   0   0  |              37MiB / 19968MiB    | 42      0 |  3   0    2    0    0 |
+|                  |                 0MiB / 32767MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  0   10   0   1  |              12MiB /  4864MiB    | 14      0 |  1   0    0    0    0 |
+|                  |                 0MiB /  8191MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  1    2   0   0  |              37MiB / 19968MiB    | 42      0 |  3   0    2    0    0 |
+|                  |                 0MiB / 32767MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+
 ```
+### Deleting the workload
+
+- Delete the pod and see the newly created MIG slice deleted
+
+```sh
+kubectl delete pod cuda-vectoradd-5
+
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 550.54.14              Driver Version: 550.54.14      CUDA Version: 12.4     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A100-PCIE-40GB          Off |   00000000:0E:00.0 Off |                   On |
+| N/A   53C    P0             75W /  250W |      37MiB /  40960MiB |     N/A      Default |
+|                                         |                        |              Enabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA A100-PCIE-40GB          Off |   00000000:0F:00.0 Off |                   On |
+| N/A   60C    P0             75W /  250W |      37MiB /  40960MiB |     N/A      Default |
+|                                         |                        |              Enabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| MIG devices:                                                                            |
++------------------+----------------------------------+-----------+-----------------------+
+| GPU  GI  CI  MIG |                     Memory-Usage |        Vol|      Shared           |
+|      ID  ID  Dev |                       BAR1-Usage | SM     Unc| CE ENC DEC OFA JPG    |
+|                  |                                  |        ECC|                       |
+|==================+==================================+===========+=======================|
+|  0    2   0   0  |              37MiB / 19968MiB    | 42      0 |  3   0    2    0    0 |
+|                  |                 0MiB / 32767MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+|  1    2   0   0  |              37MiB / 19968MiB    | 42      0 |  3   0    2    0    0 |
+|                  |                 0MiB / 32767MiB  |           |                       |
++------------------+----------------------------------+-----------+-----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+
+```
+
 ### To Deploy on the cluster
+
+**All in one command**
+
+make docker-build && make docker-push && make deploy 
 
 **Build and push your image to the location specified by `IMG`:**
 
