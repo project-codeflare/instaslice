@@ -106,10 +106,9 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 
 	if pod.Labels["processedbydeamonset"] == "true" && !pod.DeletionTimestamp.IsZero() {
-		fmt.Printf("Deleted pod %v", pod.Name)
 
-		// Path to the file containing the node name
-		// Iterate over the allocations and delete the specific one
+		logger.Info("Performing cleanup ", "pod", pod.Name)
+
 		r.cleanUp(ctx, pod, logger)
 	}
 
@@ -134,7 +133,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 
 	if boolDecisionToCreateSlice && boolcontrollerProcessingDone && pod.Status.Phase != v1.PodSucceeded {
-		//Assume pod only has one container with one GPU requests
+		//Assume pod only has one container with one GPU request
 		var profileName string
 		var Giprofileid int
 		var Ciprofileid int
@@ -143,6 +142,8 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 		var migUUID string
 		var deviceForMig string
 		var instasliceList inferencev1.InstasliceList
+		var giId uint32
+		var ciId uint32
 		ret := nvml.Init()
 		if ret != nvml.SUCCESS {
 			fmt.Printf("Unable to initialize NVML: %v \n", nvml.ErrorString(ret))
@@ -155,8 +156,6 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 
 		deviceForMig, profileName, Giprofileid, Ciprofileid, CiEngProfileid = r.getAllocation(ctx, instasliceList, deviceForMig, profileName, Giprofileid, Ciprofileid, CiEngProfileid)
 		placement := nvml.GpuInstancePlacement{}
-		var giId uint32
-		var ciId uint32
 		for i := 0; i < availableGpus; i++ {
 			device, ret := nvml.DeviceGetHandleByIndex(i)
 			if ret != nvml.SUCCESS {
@@ -185,14 +184,12 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 				fmt.Printf("error getting GPU device handle: %v \n", ret)
 			}
 
-			//TODO: Remove hardcoding of profile name
-			fmt.Printf("obtained Giprofile is %v\n", Giprofileid)
 			giProfileInfo, retCodeForGi := device.GetGpuInstanceProfileInfo(Giprofileid)
 			if retCodeForGi != nvml.SUCCESS {
-				fmt.Printf("error getting GPU instance profile info for '%v': %v \n", giProfileInfo, retCodeForGi)
+				logger.Error(err, "error getting GPU instance profile info", "giProfileInfo", giProfileInfo, "retCodeForGi", retCodeForGi)
 			}
 
-			fmt.Printf("The profile id is %v with memory size %v \n", giProfileInfo.Id, giProfileInfo.MemorySizeMB)
+			logger.Info("The profile id is", "giProfileInfo", giProfileInfo.Id, "Memory", giProfileInfo.MemorySizeMB)
 
 			// Path to the file containing the node name
 			updatedPlacement := r.getAllocationsToprepare(ctx, placement)
@@ -241,8 +238,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 		existingAllocations, updatedAllocation := r.updateAllocationProcessing(instaslice, deviceUUID, profileName)
 		r.createPreparedEntry(profileName, placement, deviceUUID, pod, giId, ciId, instaslice, migUUID, updatedAllocation)
 
-		fmt.Printf("creating config map")
-		createConfigMap(context.TODO(), r.Client, migUUID, existingAllocations.Namespace, existingAllocations.PodName)
+		createConfigMap(context.TODO(), r.Client, migUUID, existingAllocations.Namespace, existingAllocations.PodName, logger)
 
 		podUpdate := r.labelsForDaemonset(pod)
 		// Retry update operation with backoff
@@ -667,13 +663,11 @@ func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferen
 
 		for _, mig := range migs {
 			migUUID, _ := mig.GetUUID()
-			fmt.Printf("The mig UUID obtained is %v", migUUID)
-
 			profile, errForProfile := mig.GetProfile()
 			if errForProfile != nil {
 				fmt.Printf("error getting profile in mig loop: %v", errForProfile)
 			}
-			fmt.Printf("The profile is %v\n", profile.GetInfo())
+
 			giID, ret := mig.GetGpuInstanceId()
 			if ret != nvml.SUCCESS {
 				fmt.Printf("error getting GPU instance ID for MIG device: %v", ret)
@@ -686,8 +680,7 @@ func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferen
 			if err2 != nvml.SUCCESS {
 				fmt.Printf("err2 %v\n", err2)
 			}
-			fmt.Printf("The instance info size %v and start %v\n", gpuInstanceInfo.Placement.Size, gpuInstanceInfo.Placement.Start)
-			fmt.Printf("The GPU inst info id is %v\n", gpuInstanceInfo.Id)
+
 			ciID, ret := mig.GetComputeInstanceId()
 			if ret != nvml.SUCCESS {
 				fmt.Printf("error getting Compute instance ID for MIG device: %v", ret)
@@ -700,7 +693,6 @@ func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferen
 			if ret != nvml.SUCCESS {
 				fmt.Printf("error getting Compute instance info for '%v': %v", ciID, ret)
 			}
-			fmt.Printf("The compute instance id is %v\n", ciInfo.Id)
 			prepared := inferencev1.PreparedDetails{
 				Profile:  profile.GetInfo().String(),
 				Start:    gpuInstanceInfo.Placement.Start,
@@ -763,7 +755,7 @@ func (m MigProfile) Attributes() []string {
 }
 
 // Create configmap which is used by Pods to consume MIG device
-func createConfigMap(ctx context.Context, k8sClient client.Client, migGPUUUID string, namespace string, podName string) error {
+func createConfigMap(ctx context.Context, k8sClient client.Client, migGPUUUID string, namespace string, podName string, logger logr.Logger) error {
 	configMap := &v1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -780,8 +772,7 @@ func createConfigMap(ctx context.Context, k8sClient client.Client, migGPUUUID st
 		log.FromContext(ctx).Error(err, "Failed to create ConfigMap")
 		return err
 	}
-	fmt.Printf("ConfigMap created successfully %v", configMap.Name)
-	//log.FromContext(ctx).Info("ConfigMap created successfully", "ConfigMap.Name", configMap.Name)
+	logger.Info("ConfigMap created successfully", "ConfigMap.Name", configMap.Name)
 	return nil
 }
 
