@@ -194,23 +194,9 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 
 			fmt.Printf("The profile id is %v with memory size %v \n", giProfileInfo.Id, giProfileInfo.MemorySizeMB)
 
-			var instasliceList inferencev1.InstasliceList
-			if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
-				fmt.Printf("Error listing Instaslice %v", err)
-			}
-			for _, instaslice := range instasliceList.Items {
-				// Path to the file containing the node name
-				nodeName := os.Getenv("NODE_NAME")
-				if instaslice.Name == nodeName {
-					for _, v := range instaslice.Spec.Allocations {
-						if v.Processed == "no" {
-							placement.Size = v.Size
-							placement.Start = v.Start
-						}
-					}
-				}
-			}
-			gi, retCodeForGiWithPlacement := device.CreateGpuInstanceWithPlacement(&giProfileInfo, &placement)
+			// Path to the file containing the node name
+			updatedPlacement := r.getAllocationsToprepare(ctx, placement)
+			gi, retCodeForGiWithPlacement := device.CreateGpuInstanceWithPlacement(&giProfileInfo, &updatedPlacement)
 			if retCodeForGiWithPlacement != nvml.SUCCESS {
 				fmt.Printf("error creating GPU instance for '%v': %v \n ", &giProfileInfo, retCodeForGiWithPlacement)
 			}
@@ -218,7 +204,6 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 			if retForGiInfor != nvml.SUCCESS {
 				fmt.Printf("error getting GPU instance info for '%v': %v \n", &giProfileInfo, retForGiInfor)
 			}
-			giId = giInfo.Id
 			//TODO: figure out the compute slice scenario, I think Kubernetes does not support this use case yet
 			ciProfileInfo, retCodeForCiProfile := gi.GetComputeInstanceProfileInfo(Ciprofileid, CiEngProfileid)
 			if retCodeForCiProfile != nvml.SUCCESS {
@@ -229,49 +214,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 				fmt.Printf("error creating Compute instance for '%v': %v \n", ci, retCodeForComputeInstance)
 			}
 			//get created mig details
-			h := &deviceHandler{}
-			h.nvml = nvml.New()
-			h.nvdevice = nvdevice.New(nvdevice.WithNvml(h.nvml))
-
-			ret1 := h.nvml.Init()
-			if ret1 != nvml.SUCCESS {
-				fmt.Printf("Unable to initialize NVML: %v", nvml.ErrorString(ret))
-			}
-			nvlibParentDevice, err := h.nvdevice.NewDevice(device)
-			if err != nil {
-				fmt.Printf("unable to get nvlib GPU parent device for MIG UUID '%v': %v", uuid, ret)
-			}
-			migs, err := nvlibParentDevice.GetMigDevices()
-			if err != nil {
-				fmt.Printf("unable to get MIG devices on GPU '%v': %v", uuid, err)
-			}
-			for _, mig := range migs {
-				obtainedProfileName, _ := mig.GetProfile()
-				fmt.Printf("obtained profile is %v\n", obtainedProfileName)
-				giID, ret := mig.GetGpuInstanceId()
-				if ret != nvml.SUCCESS {
-					fmt.Printf("error getting GPU instance ID for MIG device: %v", ret)
-				}
-				gpuInstance, err1 := device.GetGpuInstanceById(giID)
-				if err1 != nvml.SUCCESS {
-					fmt.Printf("Unable to get GPU instance %v\n", err1)
-				}
-				gpuInstanceInfo, err2 := gpuInstance.GetInfo()
-				if err2 != nvml.SUCCESS {
-					fmt.Printf("Unable to get GPU instance info %v\n", err2)
-				}
-				fmt.Printf("The instance info size %v and start %v\n", gpuInstanceInfo.Placement.Size, gpuInstanceInfo.Placement.Start)
-
-				if profileName == obtainedProfileName.String() {
-					realizedMig, _ := mig.GetUUID()
-					migUUID = realizedMig
-					migCid, _ := mig.GetComputeInstanceId()
-					ci, _ := gpuInstance.GetComputeInstanceById(migCid)
-					ciMigInfo, _ := ci.GetInfo()
-					ciId = ciMigInfo.Id
-
-				}
-			}
+			giId, migUUID, ciId = r.getCreatedSliceDetails(giId, giInfo, ret, device, uuid, profileName, migUUID, ciId)
 			//create slice only on one GPU, both CI and GI creation are succeeded.
 			if retCodeForCiProfile == retCodeForGi {
 				break
@@ -323,6 +266,74 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *InstaSliceDaemonsetReconciler) getAllocationsToprepare(ctx context.Context, placement nvml.GpuInstancePlacement) nvml.GpuInstancePlacement {
+	var instasliceList inferencev1.InstasliceList
+	if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
+		fmt.Printf("Error listing Instaslice %v", err)
+	}
+	for _, instaslice := range instasliceList.Items {
+
+		nodeName := os.Getenv("NODE_NAME")
+		if instaslice.Name == nodeName {
+			for _, v := range instaslice.Spec.Allocations {
+				if v.Processed == "no" {
+					placement.Size = v.Size
+					placement.Start = v.Start
+				}
+			}
+		}
+	}
+	return placement
+}
+
+func (*InstaSliceDaemonsetReconciler) getCreatedSliceDetails(giId uint32, giInfo nvml.GpuInstanceInfo, ret nvml.Return, device nvml.Device, uuid string, profileName string, migUUID string, ciId uint32) (uint32, string, uint32) {
+	giId = giInfo.Id
+	h := &deviceHandler{}
+	h.nvml = nvml.New()
+	h.nvdevice = nvdevice.New(nvdevice.WithNvml(h.nvml))
+
+	ret1 := h.nvml.Init()
+	if ret1 != nvml.SUCCESS {
+		fmt.Printf("Unable to initialize NVML: %v", nvml.ErrorString(ret))
+	}
+	nvlibParentDevice, err := h.nvdevice.NewDevice(device)
+	if err != nil {
+		fmt.Printf("unable to get nvlib GPU parent device for MIG UUID '%v': %v", uuid, ret)
+	}
+	migs, err := nvlibParentDevice.GetMigDevices()
+	if err != nil {
+		fmt.Printf("unable to get MIG devices on GPU '%v': %v", uuid, err)
+	}
+	for _, mig := range migs {
+		obtainedProfileName, _ := mig.GetProfile()
+		fmt.Printf("obtained profile is %v\n", obtainedProfileName)
+		giID, ret := mig.GetGpuInstanceId()
+		if ret != nvml.SUCCESS {
+			fmt.Printf("error getting GPU instance ID for MIG device: %v", ret)
+		}
+		gpuInstance, err1 := device.GetGpuInstanceById(giID)
+		if err1 != nvml.SUCCESS {
+			fmt.Printf("Unable to get GPU instance %v\n", err1)
+		}
+		gpuInstanceInfo, err2 := gpuInstance.GetInfo()
+		if err2 != nvml.SUCCESS {
+			fmt.Printf("Unable to get GPU instance info %v\n", err2)
+		}
+		fmt.Printf("The instance info size %v and start %v\n", gpuInstanceInfo.Placement.Size, gpuInstanceInfo.Placement.Start)
+
+		if profileName == obtainedProfileName.String() {
+			realizedMig, _ := mig.GetUUID()
+			migUUID = realizedMig
+			migCid, _ := mig.GetComputeInstanceId()
+			ci, _ := gpuInstance.GetComputeInstanceById(migCid)
+			ciMigInfo, _ := ci.GetInfo()
+			ciId = ciMigInfo.Id
+
+		}
+	}
+	return giId, migUUID, ciId
 }
 
 func (r *InstaSliceDaemonsetReconciler) getAllocation(ctx context.Context, instasliceList inferencev1.InstasliceList, deviceForMig string, profileName string, Giprofileid int, Ciprofileid int, CiEngProfileid int) (string, string, int, int, int) {
