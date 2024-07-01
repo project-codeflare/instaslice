@@ -343,7 +343,6 @@ func (r *InstaSliceDaemonsetReconciler) getAllocation(ctx context.Context, insta
 				if v.Processed == "no" {
 					deviceForMig = k
 					profileName = v.Profile
-					fmt.Printf("obtained profile is %v\n", profileName)
 					Giprofileid = v.Giprofileid
 					Ciprofileid = v.CIProfileID
 					CiEngProfileid = v.CIEngProfileID
@@ -519,13 +518,16 @@ func (r *InstaSliceDaemonsetReconciler) delayUngating() {
 
 // This function discovers MIG devices as the plugin comes up. this is run exactly once.
 func (r *InstaSliceDaemonsetReconciler) discoverMigEnabledGpuWithSlices() ([]string, error) {
-	//TODO: merge two for loops
 	instaslice, _, gpuModelMap, failed, returnValue, errorDiscoveringProfiles := r.discoverAvailableProfilesOnGpus()
 	if failed {
 		return returnValue, errorDiscoveringProfiles
 	}
 
-	r.discoverDanglingSlices(instaslice)
+	err := r.discoverDanglingSlices(instaslice)
+
+	if err != nil {
+		return nil, err
+	}
 
 	// Path to the file containing the node name
 	nodeName := os.Getenv("NODE_NAME")
@@ -536,13 +538,13 @@ func (r *InstaSliceDaemonsetReconciler) discoverMigEnabledGpuWithSlices() ([]str
 	customCtx := context.TODO()
 	errToCreate := r.Create(customCtx, instaslice)
 	if errToCreate != nil {
-		fmt.Printf("Error creating object %v\n", errToCreate)
+		return nil, errToCreate
 	}
 
 	// Object exists, update its status
 	instaslice.Status.Processed = "true"
 	if errForStatus := r.Status().Update(customCtx, instaslice); errForStatus != nil {
-		fmt.Printf("Error adding status %v\n", errForStatus)
+		return nil, errForStatus
 	}
 
 	return discoveredGpusOnHost, nil
@@ -552,19 +554,19 @@ func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*infere
 	instaslice := &inferencev1.Instaslice{}
 	ret := nvml.Init()
 	if ret != nvml.SUCCESS {
-		fmt.Printf("Unable to initialize NVML: %v \n", nvml.ErrorString(ret))
+		return nil, ret, nil, false, nil, ret
 	}
 
 	count, ret := nvml.DeviceGetCount()
 	if ret != nvml.SUCCESS {
-		fmt.Printf("Unable to get device count: %v \n", nvml.ErrorString(ret))
+		return nil, ret, nil, false, nil, ret
 	}
 	gpuModelMap := make(map[string]string)
 	discoverProfilePerNode := true
 	for i := 0; i < count; i++ {
 		device, ret := nvml.DeviceGetHandleByIndex(i)
 		if ret != nvml.SUCCESS {
-			fmt.Printf("Unable to get device at index %d: %v \n", i, nvml.ErrorString(ret))
+			return nil, ret, nil, false, nil, ret
 		}
 
 		uuid, _ := device.GetUUID()
@@ -582,12 +584,12 @@ func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*infere
 					continue
 				}
 				if ret != nvml.SUCCESS {
-					fmt.Printf("error retrieving GpuInstanceProfileInfo for profile %d on GPU %v", i, uuid)
+					return nil, ret, nil, false, nil, ret
 				}
 
 				memory, ret := device.GetMemoryInfo()
 				if ret != nvml.SUCCESS {
-					fmt.Printf("error getting memory info for device %v: %v", uuid, ret)
+					return nil, ret, nil, false, nil, ret
 				}
 
 				profile := NewMigProfile(i, i, nvml.COMPUTE_INSTANCE_ENGINE_PROFILE_SHARED, giProfileInfo.SliceCount, giProfileInfo.SliceCount, giProfileInfo.MemorySizeMB, memory.Total)
@@ -600,7 +602,7 @@ func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*infere
 					continue
 				}
 				if ret != nvml.SUCCESS {
-					return nil, 0, nil, true, nil, fmt.Errorf("error retrieving GpuInstancePossiblePlacements for profile %d on GPU %v", i, uuid)
+					return nil, 0, nil, true, nil, ret
 				}
 				placementsForProfile := []inferencev1.Placement{}
 				for _, p := range giPossiblePlacements {
@@ -626,72 +628,72 @@ func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*infere
 	return instaslice, ret, gpuModelMap, false, nil, nil
 }
 
-func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferencev1.Instaslice) {
+func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferencev1.Instaslice) error {
 	h := &deviceHandler{}
 	h.nvml = nvml.New()
 	h.nvdevice = nvdevice.New(nvdevice.WithNvml(h.nvml))
 
-	ret1 := h.nvml.Init()
-	if ret1 != nvml.SUCCESS {
-		fmt.Printf("Unable to initialize NVML: %v", nvml.ErrorString(ret1))
+	errInitNvml := h.nvml.Init()
+	if errInitNvml != nvml.SUCCESS {
+		return errInitNvml
 	}
 
-	availableGpusOnNode, ret1 := h.nvml.DeviceGetCount()
-	if ret1 != nvml.SUCCESS {
-		fmt.Printf("Unable to get device count: %v", nvml.ErrorString(ret1))
+	availableGpusOnNode, errObtainingDeviceCount := h.nvml.DeviceGetCount()
+	if errObtainingDeviceCount != nvml.SUCCESS {
+		return errObtainingDeviceCount
 	}
 
 	for i := 0; i < availableGpusOnNode; i++ {
-		device, ret := h.nvml.DeviceGetHandleByIndex(i)
-		if ret != nvml.SUCCESS {
-			fmt.Printf("Unable to get device at index %d: %v \n", i, nvml.ErrorString(ret))
+		device, errObtainingDeviceHandle := h.nvml.DeviceGetHandleByIndex(i)
+		if errObtainingDeviceHandle != nvml.SUCCESS {
+			return errObtainingDeviceHandle
 		}
 
-		uuid, ret := device.GetUUID()
-		if ret != nvml.SUCCESS {
-			fmt.Printf("Unable to get uuid of device at index %d: %v \n", i, nvml.ErrorString(ret))
+		uuid, errObtainingDeviceUUID := device.GetUUID()
+		if errObtainingDeviceUUID != nvml.SUCCESS {
+			return errObtainingDeviceUUID
 		}
 
-		nvlibParentDevice, err := h.nvdevice.NewDevice(device)
-		if err != nil {
-			fmt.Printf("unable to get nvlib GPU parent device for MIG UUID '%v': %v", uuid, ret)
+		nvlibParentDevice, errObtainingParentDevice := h.nvdevice.NewDevice(device)
+		if errObtainingParentDevice != nil {
+			return errObtainingParentDevice
 		}
-		migs, err := nvlibParentDevice.GetMigDevices()
-		if err != nil {
-			fmt.Printf("unable to get MIG devices on GPU '%v': %v", uuid, err)
+		migs, errRetrievingMigDevices := nvlibParentDevice.GetMigDevices()
+		if errRetrievingMigDevices != nil {
+			return errRetrievingMigDevices
 		}
 
 		for _, mig := range migs {
 			migUUID, _ := mig.GetUUID()
 			profile, errForProfile := mig.GetProfile()
 			if errForProfile != nil {
-				fmt.Printf("error getting profile in mig loop: %v", errForProfile)
+				return errForProfile
 			}
 
-			giID, ret := mig.GetGpuInstanceId()
-			if ret != nvml.SUCCESS {
-				fmt.Printf("error getting GPU instance ID for MIG device: %v", ret)
+			giID, errForMigGid := mig.GetGpuInstanceId()
+			if errForMigGid != nvml.SUCCESS {
+				return errForMigGid
 			}
-			gpuInstance, err1 := device.GetGpuInstanceById(giID)
-			if err1 != nvml.SUCCESS {
-				fmt.Printf("err1 %v\n", err1)
+			gpuInstance, errRetrievingDeviceGid := device.GetGpuInstanceById(giID)
+			if errRetrievingDeviceGid != nvml.SUCCESS {
+				return errRetrievingDeviceGid
 			}
-			gpuInstanceInfo, err2 := gpuInstance.GetInfo()
-			if err2 != nvml.SUCCESS {
-				fmt.Printf("err2 %v\n", err2)
+			gpuInstanceInfo, errObtainingInfo := gpuInstance.GetInfo()
+			if errObtainingInfo != nvml.SUCCESS {
+				return errObtainingInfo
 			}
 
 			ciID, ret := mig.GetComputeInstanceId()
 			if ret != nvml.SUCCESS {
-				fmt.Printf("error getting Compute instance ID for MIG device: %v", ret)
+				return ret
 			}
 			ci, ret := gpuInstance.GetComputeInstanceById(ciID)
 			if ret != nvml.SUCCESS {
-				fmt.Printf("error getting Compute instance for '%v': %v", ciID, ret)
+				return ret
 			}
 			ciInfo, ret := ci.GetInfo()
 			if ret != nvml.SUCCESS {
-				fmt.Printf("error getting Compute instance info for '%v': %v", ciID, ret)
+				return ret
 			}
 			prepared := inferencev1.PreparedDetails{
 				Profile:  profile.GetInfo().String(),
@@ -707,6 +709,7 @@ func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferen
 			instaslice.Spec.Prepared[migUUID] = prepared
 		}
 	}
+	return nil
 }
 
 // NewMigProfile constructs a new MigProfile struct using info from the giProfiles and ciProfiles used to create it.
