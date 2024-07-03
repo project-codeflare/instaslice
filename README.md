@@ -7,10 +7,10 @@ Experimental InstaSlice works with GPU operator to create mig slices on demand.
 ## Getting Started
 
 ### Prerequisites
-- go version v1.22.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a KinD cluster.
+- [Go](https://go.dev/doc/install) v1.22.0+
+- [Docker](https://docs.docker.com/get-docker/) v17.03+
+- [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl) v1.11.3+.
+- Access to a [KinD](https://kind.sigs.k8s.io/docs/user/quick-start/) cluster.
 
 ### Install KinD cluster with GPU operator
 
