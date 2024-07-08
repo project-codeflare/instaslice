@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	inferencev1 "codeflare.dev/instaslice/api/v1"
+	inferencev1alpha1 "codeflare.dev/instaslice/api/v1alpha1"
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
@@ -141,7 +141,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 		var deviceUUID string
 		var migUUID string
 		var deviceForMig string
-		var instasliceList inferencev1.InstasliceList
+		var instasliceList inferencev1alpha1.InstasliceList
 		var giId uint32
 		var ciId uint32
 		ret := nvml.Init()
@@ -229,7 +229,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 			Name:      nodeName,
 			Namespace: "default",
 		}
-		instaslice := &inferencev1.Instaslice{}
+		instaslice := &inferencev1alpha1.Instaslice{}
 		errGettingobj := r.Get(context.TODO(), typeNamespacedName, instaslice)
 
 		if errGettingobj != nil {
@@ -265,7 +265,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 }
 
 func (r *InstaSliceDaemonsetReconciler) getAllocationsToprepare(ctx context.Context, placement nvml.GpuInstancePlacement) nvml.GpuInstancePlacement {
-	var instasliceList inferencev1.InstasliceList
+	var instasliceList inferencev1alpha1.InstasliceList
 	if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
 		fmt.Printf("Error listing Instaslice %v", err)
 	}
@@ -332,7 +332,7 @@ func (*InstaSliceDaemonsetReconciler) getCreatedSliceDetails(giId uint32, giInfo
 	return giId, migUUID, ciId
 }
 
-func (r *InstaSliceDaemonsetReconciler) getAllocation(ctx context.Context, instasliceList inferencev1.InstasliceList, deviceForMig string, profileName string, Giprofileid int, Ciprofileid int, CiEngProfileid int) (string, string, int, int, int) {
+func (r *InstaSliceDaemonsetReconciler) getAllocation(ctx context.Context, instasliceList inferencev1alpha1.InstasliceList, deviceForMig string, profileName string, Giprofileid int, Ciprofileid int, CiEngProfileid int) (string, string, int, int, int) {
 	if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
 		fmt.Printf("Error listing Instaslice %v", err)
 	}
@@ -358,7 +358,7 @@ func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, pod *v1.Pod
 	if ret != nvml.SUCCESS {
 		logger.Error(ret, "Unable to initialize NVML")
 	}
-	var instasliceList inferencev1.InstasliceList
+	var instasliceList inferencev1alpha1.InstasliceList
 	if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
 		fmt.Printf("Error listing Instaslice %v", err)
 	}
@@ -412,8 +412,8 @@ func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, pod *v1.Pod
 	}
 }
 
-func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, placement nvml.GpuInstancePlacement, deviceUUID string, pod *v1.Pod, giId uint32, ciId uint32, instaslice *inferencev1.Instaslice, migUUID string, updatedAllocation inferencev1.AllocationDetails) {
-	instaslicePrepared := inferencev1.PreparedDetails{
+func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, placement nvml.GpuInstancePlacement, deviceUUID string, pod *v1.Pod, giId uint32, ciId uint32, instaslice *inferencev1alpha1.Instaslice, migUUID string, updatedAllocation inferencev1alpha1.AllocationDetails) {
+	instaslicePrepared := inferencev1alpha1.PreparedDetails{
 		Profile:  profileName,
 		Start:    placement.Start,
 		Size:     placement.Size,
@@ -423,7 +423,7 @@ func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, 
 		Ciinfoid: ciId,
 	}
 	if instaslice.Spec.Prepared == nil {
-		instaslice.Spec.Prepared = make(map[string]inferencev1.PreparedDetails)
+		instaslice.Spec.Prepared = make(map[string]inferencev1alpha1.PreparedDetails)
 	}
 	instaslice.Spec.Prepared[migUUID] = instaslicePrepared
 	instaslice.Spec.Allocations[deviceUUID] = updatedAllocation
@@ -435,9 +435,9 @@ func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, 
 	}
 }
 
-func (*InstaSliceDaemonsetReconciler) updateAllocationProcessing(instaslice *inferencev1.Instaslice, deviceUUID string, profileName string) (inferencev1.AllocationDetails, inferencev1.AllocationDetails) {
+func (*InstaSliceDaemonsetReconciler) updateAllocationProcessing(instaslice *inferencev1alpha1.Instaslice, deviceUUID string, profileName string) (inferencev1alpha1.AllocationDetails, inferencev1alpha1.AllocationDetails) {
 	existingAllocations := instaslice.Spec.Allocations[deviceUUID]
-	updatedAllocation := inferencev1.AllocationDetails{
+	updatedAllocation := inferencev1alpha1.AllocationDetails{
 		Profile:     profileName,
 		Start:       existingAllocations.Start,
 		Size:        existingAllocations.Size,
@@ -550,8 +550,8 @@ func (r *InstaSliceDaemonsetReconciler) discoverMigEnabledGpuWithSlices() ([]str
 	return discoveredGpusOnHost, nil
 }
 
-func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*inferencev1.Instaslice, nvml.Return, map[string]string, bool, []string, error) {
-	instaslice := &inferencev1.Instaslice{}
+func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*inferencev1alpha1.Instaslice, nvml.Return, map[string]string, bool, []string, error) {
+	instaslice := &inferencev1alpha1.Instaslice{}
 	ret := nvml.Init()
 	if ret != nvml.SUCCESS {
 		return nil, ret, nil, false, nil, ret
@@ -604,16 +604,16 @@ func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*infere
 				if ret != nvml.SUCCESS {
 					return nil, 0, nil, true, nil, ret
 				}
-				placementsForProfile := []inferencev1.Placement{}
+				placementsForProfile := []inferencev1alpha1.Placement{}
 				for _, p := range giPossiblePlacements {
-					placement := inferencev1.Placement{
+					placement := inferencev1alpha1.Placement{
 						Size:  int(p.Size),
 						Start: int(p.Start),
 					}
 					placementsForProfile = append(placementsForProfile, placement)
 				}
 
-				aggregatedPlacementsForProfile := inferencev1.Mig{
+				aggregatedPlacementsForProfile := inferencev1alpha1.Mig{
 					Placements:     placementsForProfile,
 					Profile:        profile.String(),
 					Giprofileid:    i,
@@ -628,7 +628,7 @@ func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*infere
 	return instaslice, ret, gpuModelMap, false, nil, nil
 }
 
-func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferencev1.Instaslice) error {
+func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferencev1alpha1.Instaslice) error {
 	h := &deviceHandler{}
 	h.nvml = nvml.New()
 	h.nvdevice = nvdevice.New(nvdevice.WithNvml(h.nvml))
@@ -695,7 +695,7 @@ func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferen
 			if ret != nvml.SUCCESS {
 				return ret
 			}
-			prepared := inferencev1.PreparedDetails{
+			prepared := inferencev1alpha1.PreparedDetails{
 				Profile:  profile.GetInfo().String(),
 				Start:    gpuInstanceInfo.Placement.Start,
 				Size:     gpuInstanceInfo.Placement.Size,
@@ -704,7 +704,7 @@ func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferen
 				Ciinfoid: ciInfo.Id,
 			}
 			if instaslice.Spec.Prepared == nil {
-				instaslice.Spec.Prepared = make(map[string]inferencev1.PreparedDetails)
+				instaslice.Spec.Prepared = make(map[string]inferencev1alpha1.PreparedDetails)
 			}
 			instaslice.Spec.Prepared[migUUID] = prepared
 		}

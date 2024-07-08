@@ -21,7 +21,7 @@ import (
 	"regexp"
 	"strings"
 
-	inferencev1 "codeflare.dev/instaslice/api/v1"
+	inferencev1alpha1 "codeflare.dev/instaslice/api/v1alpha1"
 	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -43,7 +43,7 @@ type InstasliceReconciler struct {
 
 // AllocationPolicy interface with a single method
 type AllocationPolicy interface {
-	SetAllocationDetails(profileName string, newStart, size uint32, podUUID string, nodename string, processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int, namespace string, podName string) *inferencev1.AllocationDetails
+	SetAllocationDetails(profileName string, newStart, size uint32, podUUID string, nodename string, processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int, namespace string, podName string) *inferencev1alpha1.AllocationDetails
 }
 
 type RightToLeftPolicy struct{}
@@ -102,7 +102,7 @@ func (r *InstasliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		profileName := r.extractProfileName(limits)
 		logger.Info("The profile name obtained", "name", profileName)
 		// List all instances
-		var instasliceList inferencev1.InstasliceList
+		var instasliceList inferencev1alpha1.InstasliceList
 
 		if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
 			logger.Error(err, "Error listing Instaslice")
@@ -131,13 +131,13 @@ func (r *InstasliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
-func (r *InstasliceReconciler) findDeviceForASlice(ctx context.Context, instaslice inferencev1.Instaslice, gpuUUID string, profileName string, policy AllocationPolicy, pod *v1.Pod, logger logr.Logger) (string, bool, reconcile.Result, error) {
+func (r *InstasliceReconciler) findDeviceForASlice(ctx context.Context, instaslice inferencev1alpha1.Instaslice, gpuUUID string, profileName string, policy AllocationPolicy, pod *v1.Pod, logger logr.Logger) (string, bool, reconcile.Result, error) {
 	//TODO: discover this value, this may work for A100 and H100 for now.
 	largestIndex := uint32(7)
 	for gpuuuid, _ := range instaslice.Spec.MigGPUUUID {
 		gpuUUID = gpuuuid
 		if instaslice.Spec.Allocations == nil {
-			instaslice.Spec.Allocations = make(map[string]inferencev1.AllocationDetails)
+			instaslice.Spec.Allocations = make(map[string]inferencev1alpha1.AllocationDetails)
 		}
 		maxStart := r.extractMaxStart(instaslice, gpuUUID)
 		size, discoveredGiprofile, Ciprofileid, Ciengprofileid := r.extractGpuProfile(instaslice, profileName)
@@ -179,7 +179,7 @@ func (*InstasliceReconciler) extractProfileName(limits v1.ResourceList) string {
 }
 
 // Extract NVML specific attributes for GPUs, this will change for different generations of the GPU.
-func (*InstasliceReconciler) extractGpuProfile(instaslice inferencev1.Instaslice, profileName string) (int, int, int, int) {
+func (*InstasliceReconciler) extractGpuProfile(instaslice inferencev1alpha1.Instaslice, profileName string) (int, int, int, int) {
 	var size int
 	var discoveredGiprofile int
 	var Ciprofileid int
@@ -201,7 +201,7 @@ func (*InstasliceReconciler) extractGpuProfile(instaslice inferencev1.Instaslice
 // Walk through all the allocated devices and get the max position where the slice could be allocated.
 // the implementation is specific to first fit and this is needed until we get new strategy implemented
 // in GPU operator.
-func (*InstasliceReconciler) extractMaxStart(instaslice inferencev1.Instaslice, gpuUUID string) uint32 {
+func (*InstasliceReconciler) extractMaxStart(instaslice inferencev1alpha1.Instaslice, gpuUUID string) uint32 {
 	var maxSize uint32 = 0
 	var maxStart uint32 = 0
 	for _, item := range instaslice.Spec.Prepared {
@@ -274,8 +274,8 @@ func (r *InstasliceReconciler) unGatePod(ctx context.Context, podName string, re
 // Policy based allocation - FirstFit
 func (r *FirstFitPolicy) SetAllocationDetails(profileName string, newStart, size uint32, podUUID, nodename string,
 	processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int,
-	namespace string, podName string) *inferencev1.AllocationDetails {
-	return &inferencev1.AllocationDetails{
+	namespace string, podName string) *inferencev1alpha1.AllocationDetails {
+	return &inferencev1alpha1.AllocationDetails{
 		Profile:        profileName,
 		Start:          uint32(newStart),
 		Size:           uint32(size),
@@ -293,15 +293,15 @@ func (r *FirstFitPolicy) SetAllocationDetails(profileName string, newStart, size
 // Policy based allocation - LeftToRIght
 func (l *LeftToRightPolicy) SetAllocationDetails(profileName string, newStart, size uint32, podUUID, nodename string,
 	processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int,
-	namespace string, podName string) *inferencev1.AllocationDetails {
+	namespace string, podName string) *inferencev1alpha1.AllocationDetails {
 	// Implement the left-to-right policy here
-	return &inferencev1.AllocationDetails{}
+	return &inferencev1alpha1.AllocationDetails{}
 }
 
 // Policy based allocation - RigghToLeft
 func (l *RightToLeftPolicy) SetAllocationDetails(profileName string, newStart, size uint32, podUUID, nodename string,
 	processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int,
-	namespace string, podName string) *inferencev1.AllocationDetails {
+	namespace string, podName string) *inferencev1alpha1.AllocationDetails {
 	// Implement the left-to-right policy here
-	return &inferencev1.AllocationDetails{}
+	return &inferencev1alpha1.AllocationDetails{}
 }

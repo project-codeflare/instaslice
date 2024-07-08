@@ -5,16 +5,16 @@
 domain: codeflare.dev
 layout:
 - go.kubebuilder.io/v4
-projectName: instaslicev2
+projectName: instaslice
 repo: codeflare.dev/instaslice
 resources:
 - api:
-    crdVersion: v1
+    crdVersion: v1alpha1
     namespaced: true
   controller: true
   domain: codeflare.dev
   group: inference
   kind: Instaslice
-  path: codeflare.dev/instaslice/api/v1
-  version: v1
+  path: codeflare.dev/instaslice/api/v1alpha1
+  version: v1alpha1
 version: "3"

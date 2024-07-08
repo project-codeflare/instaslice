@@ -31,7 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	inferencev1 "codeflare.dev/instaslice/api/v1"
+	inferencev1alpha1 "codeflare.dev/instaslice/api/v1alpha1"
 	runtimefake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -58,7 +58,7 @@ func TestCleanUp(t *testing.T) {
 
 	// Create a fake Kubernetes client
 	s := scheme.Scheme
-	_ = inferencev1.AddToScheme(s)
+	_ = inferencev1alpha1.AddToScheme(s)
 	fakeClient := runtimefake.NewClientBuilder().WithScheme(s).Build()
 
 	// Create a fake kubernetes clientset
@@ -71,12 +71,12 @@ func TestCleanUp(t *testing.T) {
 		Scheme: s,
 	}
 	// Create a fake Instaslice resource
-	instaslice := &inferencev1.Instaslice{
+	instaslice := &inferencev1alpha1.Instaslice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "node-1",
 		},
-		Spec: inferencev1.InstasliceSpec{
-			Prepared: map[string]inferencev1.PreparedDetails{
+		Spec: inferencev1alpha1.InstasliceSpec{
+			Prepared: map[string]inferencev1alpha1.PreparedDetails{
 				"mig-uuid-1": {
 					PodUUID:  "pod-uid-1",
 					Parent:   "GPU-1",
@@ -84,7 +84,7 @@ func TestCleanUp(t *testing.T) {
 					Ciinfoid: 1,
 				},
 			},
-			Allocations: map[string]inferencev1.AllocationDetails{
+			Allocations: map[string]inferencev1alpha1.AllocationDetails{
 				"allocation-1": {
 					PodUUID:   "pod-uid-1",
 					PodName:   "pod-name-1",
@@ -115,7 +115,7 @@ func TestCleanUp(t *testing.T) {
 	reconciler.cleanUp(context.Background(), pod, logger)
 
 	// Verify the Instaslice resource was updated
-	var updatedInstaslice inferencev1.Instaslice
+	var updatedInstaslice inferencev1alpha1.Instaslice
 	err := fakeClient.Get(context.Background(), types.NamespacedName{Name: "node-1"}, &updatedInstaslice)
 	assert.NoError(t, err)
 	assert.Empty(t, updatedInstaslice.Spec.Prepared)

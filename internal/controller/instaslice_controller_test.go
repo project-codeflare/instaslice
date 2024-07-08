@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	inferencev1 "codeflare.dev/instaslice/api/v1"
+	inferencev1alpha1 "codeflare.dev/instaslice/api/v1alpha1"
 )
 
 var _ = Describe("Instaslice Controller", func() {
@@ -40,13 +40,13 @@ var _ = Describe("Instaslice Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		instaslice := &inferencev1.Instaslice{}
+		instaslice := &inferencev1alpha1.Instaslice{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind Instaslice")
 			err := k8sClient.Get(ctx, typeNamespacedName, instaslice)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &inferencev1.Instaslice{
+				resource := &inferencev1alpha1.Instaslice{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,7 +59,7 @@ var _ = Describe("Instaslice Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &inferencev1.Instaslice{}
+			resource := &inferencev1alpha1.Instaslice{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
