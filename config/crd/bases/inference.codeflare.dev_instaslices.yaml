@@ -53,6 +53,8 @@ spec:
                       type: integer
                     giprofileid:
                       type: integer
+                    gpuUUID:
+                      type: string
                     namespace:
                       type: string
                     nodename:
@@ -75,6 +77,7 @@ spec:
                   - ciProfileid
                   - ciengprofileid
                   - giprofileid
+                  - gpuUUID
                   - namespace
                   - nodename
                   - podName

@@ -90,7 +90,7 @@ const (
 
 func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
-	logger := log.Log.WithName("InstaSlice-controller")
+	logger := log.Log.WithName("InstaSlice-daemonset")
 
 	pod := &v1.Pod{}
 	//var podName string
@@ -144,6 +144,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 		var instasliceList inferencev1alpha1.InstasliceList
 		var giId uint32
 		var ciId uint32
+		var podUUID = string(pod.UID)
 		ret := nvml.Init()
 		if ret != nvml.SUCCESS {
 			fmt.Printf("Unable to initialize NVML: %v \n", nvml.ErrorString(ret))
@@ -235,10 +236,10 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 		if errGettingobj != nil {
 			fmt.Printf("Error getting instaslice obj %v", errGettingobj)
 		}
-		existingAllocations, updatedAllocation := r.updateAllocationProcessing(instaslice, deviceUUID, profileName)
-		r.createPreparedEntry(profileName, placement, deviceUUID, pod, giId, ciId, instaslice, migUUID, updatedAllocation)
+		_, updatedAllocation := r.updateAllocationProcessing(instaslice, deviceUUID, profileName)
+		r.createPreparedEntry(profileName, placement, podUUID, deviceUUID, pod, giId, ciId, instaslice, migUUID, updatedAllocation)
 
-		createConfigMap(context.TODO(), r.Client, migUUID, existingAllocations.Namespace, existingAllocations.PodName, logger)
+		createConfigMap(context.TODO(), r.Client, migUUID, updatedAllocation.Namespace, updatedAllocation.PodName, logger)
 
 		podUpdate := r.labelsForDaemonset(pod)
 		// Retry update operation with backoff
@@ -339,9 +340,9 @@ func (r *InstaSliceDaemonsetReconciler) getAllocation(ctx context.Context, insta
 	for _, instaslice := range instasliceList.Items {
 		nodeName := os.Getenv("NODE_NAME")
 		if instaslice.Name == nodeName {
-			for k, v := range instaslice.Spec.Allocations {
+			for _, v := range instaslice.Spec.Allocations {
 				if v.Processed == "no" {
-					deviceForMig = k
+					deviceForMig = v.GPUUUID
 					profileName = v.Profile
 					Giprofileid = v.Giprofileid
 					Ciprofileid = v.CIProfileID
@@ -412,11 +413,11 @@ func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, pod *v1.Pod
 	}
 }
 
-func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, placement nvml.GpuInstancePlacement, deviceUUID string, pod *v1.Pod, giId uint32, ciId uint32, instaslice *inferencev1alpha1.Instaslice, migUUID string, updatedAllocation inferencev1alpha1.AllocationDetails) {
+func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, placement nvml.GpuInstancePlacement, podUUID string, deviceUUID string, pod *v1.Pod, giId uint32, ciId uint32, instaslice *inferencev1alpha1.Instaslice, migUUID string, updatedAllocation inferencev1alpha1.AllocationDetails) {
 	instaslicePrepared := inferencev1alpha1.PreparedDetails{
 		Profile:  profileName,
-		Start:    placement.Start,
-		Size:     placement.Size,
+		Start:    updatedAllocation.Start,
+		Size:     updatedAllocation.Size,
 		Parent:   deviceUUID,
 		PodUUID:  string(pod.UID),
 		Giinfoid: giId,
@@ -426,7 +427,7 @@ func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, 
 		instaslice.Spec.Prepared = make(map[string]inferencev1alpha1.PreparedDetails)
 	}
 	instaslice.Spec.Prepared[migUUID] = instaslicePrepared
-	instaslice.Spec.Allocations[deviceUUID] = updatedAllocation
+	instaslice.Spec.Allocations[podUUID] = updatedAllocation
 
 	errForUpdate := r.Update(context.TODO(), instaslice)
 
@@ -435,8 +436,8 @@ func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, 
 	}
 }
 
-func (*InstaSliceDaemonsetReconciler) updateAllocationProcessing(instaslice *inferencev1alpha1.Instaslice, deviceUUID string, profileName string) (inferencev1alpha1.AllocationDetails, inferencev1alpha1.AllocationDetails) {
-	existingAllocations := instaslice.Spec.Allocations[deviceUUID]
+func (*InstaSliceDaemonsetReconciler) updateAllocationProcessing(instaslice *inferencev1alpha1.Instaslice, podUUID string, profileName string) (inferencev1alpha1.AllocationDetails, inferencev1alpha1.AllocationDetails) {
+	existingAllocations := instaslice.Spec.Allocations[podUUID]
 	updatedAllocation := inferencev1alpha1.AllocationDetails{
 		Profile:     profileName,
 		Start:       existingAllocations.Start,
@@ -447,6 +448,7 @@ func (*InstaSliceDaemonsetReconciler) updateAllocationProcessing(instaslice *inf
 		Processed:   "yes",
 		Namespace:   existingAllocations.Namespace,
 		PodName:     existingAllocations.PodName,
+		GPUUUID:     existingAllocations.GPUUUID,
 	}
 	return existingAllocations, updatedAllocation
 }

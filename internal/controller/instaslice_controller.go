@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -43,7 +44,7 @@ type InstasliceReconciler struct {
 
 // AllocationPolicy interface with a single method
 type AllocationPolicy interface {
-	SetAllocationDetails(profileName string, newStart, size uint32, podUUID string, nodename string, processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int, namespace string, podName string) *inferencev1alpha1.AllocationDetails
+	SetAllocationDetails(profileName string, newStart, size uint32, podUUID string, nodename string, processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int, namespace string, podName string, gpuUuid string) *inferencev1alpha1.AllocationDetails
 }
 
 type RightToLeftPolicy struct{}
@@ -133,31 +134,29 @@ func (r *InstasliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 func (r *InstasliceReconciler) findDeviceForASlice(ctx context.Context, instaslice inferencev1alpha1.Instaslice, gpuUUID string, profileName string, policy AllocationPolicy, pod *v1.Pod, logger logr.Logger) (string, bool, reconcile.Result, error) {
 	//TODO: discover this value, this may work for A100 and H100 for now.
-	largestIndex := uint32(7)
 	for gpuuuid, _ := range instaslice.Spec.MigGPUUUID {
 		gpuUUID = gpuuuid
 		if instaslice.Spec.Allocations == nil {
 			instaslice.Spec.Allocations = make(map[string]inferencev1alpha1.AllocationDetails)
 		}
-		maxStart := r.extractMaxStart(instaslice, gpuUUID)
-		size, discoveredGiprofile, Ciprofileid, Ciengprofileid := r.extractGpuProfile(instaslice, profileName)
-		if maxStart+uint32(size) <= largestIndex {
-			logger.Info("Device where the slice will be placed", "DeviceUUID", gpuUUID)
+		newStart := r.getStartIndexFromPreparedState(instaslice, gpuUUID, profileName)
+		notValidIndex := uint32(8)
+		if newStart == notValidIndex {
+			//Move to next GPU
+			continue
 		}
-
-		newStart := maxStart - uint32(size)
-		logger.Info("The placement is ", "index", newStart)
+		size, discoveredGiprofile, Ciprofileid, Ciengprofileid := r.extractGpuProfile(instaslice, profileName)
 		allocDetails := policy.SetAllocationDetails(profileName, uint32(newStart), uint32(size),
 			string(pod.UID), instaslice.Name, "no", discoveredGiprofile,
-			Ciprofileid, Ciengprofileid, pod.Namespace, pod.Name)
-		instaslice.Spec.Allocations[gpuUUID] = *allocDetails
+			Ciprofileid, Ciengprofileid, pod.Namespace, pod.Name, gpuUUID)
+		instaslice.Spec.Allocations[string(pod.UID)] = *allocDetails
 		if err := r.Update(ctx, &instaslice); err != nil {
 			logger.Error(err, "Error updating instaslice allocations")
 			return "", true, ctrl.Result{}, err
 		}
 		return gpuUUID, false, reconcile.Result{}, nil
 	}
-	return gpuUUID, false, reconcile.Result{}, nil
+	return "", false, reconcile.Result{}, fmt.Errorf("No valid GPU found that can fit slice")
 }
 
 // Extract profile name from the container limits spec
@@ -198,23 +197,76 @@ func (*InstasliceReconciler) extractGpuProfile(instaslice inferencev1alpha1.Inst
 	return size, discoveredGiprofile, Ciprofileid, Ciengprofileid
 }
 
-// Walk through all the allocated devices and get the max position where the slice could be allocated.
-// the implementation is specific to first fit and this is needed until we get new strategy implemented
-// in GPU operator.
-func (*InstasliceReconciler) extractMaxStart(instaslice inferencev1alpha1.Instaslice, gpuUUID string) uint32 {
-	var maxSize uint32 = 0
-	var maxStart uint32 = 0
+func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice inferencev1alpha1.Instaslice, gpuUUID string, profileName string) uint32 {
+	//TODO: generalize, A100 and H100 have 7 profiles so it hardwired for now
+	var gpuAllocatedIndex [7]uint32
+	// Explicitly set the array to all zeros
+	for i := range gpuAllocatedIndex {
+		gpuAllocatedIndex[i] = 0
+	}
 	for _, item := range instaslice.Spec.Prepared {
 		if item.Parent == gpuUUID {
-			if maxSize < item.Size {
-				maxSize = item.Size
+			for i := 0; i < int(item.Size); i++ {
+				gpuAllocatedIndex[int(item.Start)+i] = 1
 			}
-			if maxStart < item.Start {
-				maxStart = item.Start
-			}
+
 		}
 	}
-	return maxStart
+
+	var neededContinousSlot int
+	var possiblePlacements []int
+	for _, placement := range instaslice.Spec.Migplacement {
+		if placement.Profile == profileName {
+			neededContinousSlot = placement.Placements[0].Size
+			for _, placement := range placement.Placements {
+				possiblePlacements = append(possiblePlacements, placement.Start)
+			}
+			break
+		}
+	}
+	//TODO: generalize, no slices can be placed on 8th index
+	//if we return 8 then assume no valid index is found.
+	var newStart = uint32(8)
+	for _, value := range possiblePlacements {
+		if gpuAllocatedIndex[value] == 0 {
+			if neededContinousSlot == 1 {
+				newStart = uint32(value)
+				break
+			}
+			if neededContinousSlot == 2 {
+				if value+neededContinousSlot < len(gpuAllocatedIndex) {
+					if gpuAllocatedIndex[value] == 0 && gpuAllocatedIndex[value+1] == 0 {
+						newStart = uint32(value)
+						break
+					}
+				}
+
+			}
+			if neededContinousSlot == 4 {
+				if value+neededContinousSlot < len(gpuAllocatedIndex) {
+					if gpuAllocatedIndex[value] == 0 && gpuAllocatedIndex[value+1] == 0 && gpuAllocatedIndex[value+2] == 0 && gpuAllocatedIndex[value+3] == 0 {
+						newStart = uint32(value)
+						break
+					}
+				}
+			}
+
+			if neededContinousSlot == 8 {
+				//special case
+				if value+neededContinousSlot-1 < len(gpuAllocatedIndex) {
+					if gpuAllocatedIndex[value] == 0 && gpuAllocatedIndex[value+1] == 0 &&
+						gpuAllocatedIndex[value+2] == 0 && gpuAllocatedIndex[value+3] == 0 &&
+						gpuAllocatedIndex[value+4] == 0 && gpuAllocatedIndex[value+5] == 0 &&
+						gpuAllocatedIndex[value+6] == 0 && gpuAllocatedIndex[value+7] == 0 {
+						newStart = uint32(value)
+					}
+				}
+			}
+		}
+
+	}
+
+	return newStart
 }
 
 // Since we dont have user facing CRD, we make our way with attaching labels to the pods to indicate processing status.
@@ -274,7 +326,7 @@ func (r *InstasliceReconciler) unGatePod(ctx context.Context, podName string, re
 // Policy based allocation - FirstFit
 func (r *FirstFitPolicy) SetAllocationDetails(profileName string, newStart, size uint32, podUUID, nodename string,
 	processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int,
-	namespace string, podName string) *inferencev1alpha1.AllocationDetails {
+	namespace string, podName string, gpuUuid string) *inferencev1alpha1.AllocationDetails {
 	return &inferencev1alpha1.AllocationDetails{
 		Profile:        profileName,
 		Start:          uint32(newStart),
@@ -287,13 +339,14 @@ func (r *FirstFitPolicy) SetAllocationDetails(profileName string, newStart, size
 		CIEngProfileID: Ciengprofileid,
 		Namespace:      namespace,
 		PodName:        podName,
+		GPUUUID:        gpuUuid,
 	}
 }
 
 // Policy based allocation - LeftToRIght
 func (l *LeftToRightPolicy) SetAllocationDetails(profileName string, newStart, size uint32, podUUID, nodename string,
 	processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int,
-	namespace string, podName string) *inferencev1alpha1.AllocationDetails {
+	namespace string, podName string, gpuUuid string) *inferencev1alpha1.AllocationDetails {
 	// Implement the left-to-right policy here
 	return &inferencev1alpha1.AllocationDetails{}
 }
@@ -301,7 +354,7 @@ func (l *LeftToRightPolicy) SetAllocationDetails(profileName string, newStart, s
 // Policy based allocation - RigghToLeft
 func (l *RightToLeftPolicy) SetAllocationDetails(profileName string, newStart, size uint32, podUUID, nodename string,
 	processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int,
-	namespace string, podName string) *inferencev1alpha1.AllocationDetails {
+	namespace string, podName string, gpuUuid string) *inferencev1alpha1.AllocationDetails {
 	// Implement the left-to-right policy here
 	return &inferencev1alpha1.AllocationDetails{}
 }

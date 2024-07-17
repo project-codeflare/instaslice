@@ -39,6 +39,7 @@ type AllocationDetails struct {
 	Start          uint32 `json:"start"`
 	Size           uint32 `json:"size"`
 	PodUUID        string `json:"podUUID"`
+	GPUUUID        string `json:"gpuUUID"`
 	Nodename       string `json:"nodename"`
 	Processed      string `json:"processed"`
 	Giprofileid    int    `json:"giprofileid"`
