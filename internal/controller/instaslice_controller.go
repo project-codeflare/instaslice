@@ -346,7 +346,7 @@ func (r *FirstFitPolicy) SetAllocationDetails(profileName string, newStart, size
 // Policy based allocation - LeftToRIght
 func (l *LeftToRightPolicy) SetAllocationDetails(profileName string, newStart, size uint32, podUUID, nodename string,
 	processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int,
-	namespace string, podName string) *inferencev1alpha1.AllocationDetails {
+	namespace string, podName string, gpuUuid string) *inferencev1alpha1.AllocationDetails {
 	// Implement the left-to-right policy here
 	return &inferencev1alpha1.AllocationDetails{}
 }
@@ -354,7 +354,7 @@ func (l *LeftToRightPolicy) SetAllocationDetails(profileName string, newStart, s
 // Policy based allocation - RigghToLeft
 func (l *RightToLeftPolicy) SetAllocationDetails(profileName string, newStart, size uint32, podUUID, nodename string,
 	processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int,
-	namespace string, podName string) *inferencev1alpha1.AllocationDetails {
+	namespace string, podName string, gpuUuid string) *inferencev1alpha1.AllocationDetails {
 	// Implement the left-to-right policy here
 	return &inferencev1alpha1.AllocationDetails{}
 }
