@@ -47,6 +47,7 @@ type InstaSliceDaemonsetReconciler struct {
 	client.Client
 	Scheme     *runtime.Scheme
 	kubeClient *kubernetes.Clientset
+	NodeName   string
 }
 
 //+kubebuilder:rbac:groups=inference.codeflare.dev,resources=instaslices,verbs=get;list;watch;create;update;patch;delete
@@ -503,9 +504,21 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 		return err
 	}
 
-	_, errForDiscoveringGpus := r.discoverMigEnabledGpuWithSlices()
-	if errForDiscoveringGpus != nil {
-		return errForDiscoveringGpus
+	var instaslice inferencev1alpha1.Instaslice
+	client := mgr.GetClient()
+	typeNamespacedName := types.NamespacedName{
+		Namespace: "default",
+		Name:      r.NodeName,
+	}
+	errRetrievingInstaslice := client.Get(context.TODO(), typeNamespacedName, &instaslice)
+	if errRetrievingInstaslice != nil {
+		if errors.IsNotFound(errRetrievingInstaslice) {
+			fmt.Printf("Creating InstaSlice object with name %v", r.NodeName)
+			_, errForDiscoveringGpus := r.discoverMigEnabledGpuWithSlices()
+			if errForDiscoveringGpus != nil {
+				return errForDiscoveringGpus
+			}
+		}
 	}
 	//r.discoverExistingSlice()
 	return ctrl.NewControllerManagedBy(mgr).
