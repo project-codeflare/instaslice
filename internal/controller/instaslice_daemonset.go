@@ -512,12 +512,13 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 	}
 	errRetrievingInstaslice := client.Get(context.TODO(), typeNamespacedName, &instaslice)
 	if errRetrievingInstaslice != nil {
-		if errors.IsNotFound(errRetrievingInstaslice) {
-			fmt.Printf("Creating InstaSlice object with name %v", r.NodeName)
-			_, errForDiscoveringGpus := r.discoverMigEnabledGpuWithSlices()
-			if errForDiscoveringGpus != nil {
-				return errForDiscoveringGpus
-			}
+		fmt.Printf("InstaSlice object not found, is CRD installed?")
+	}
+	if instaslice.Status.Processed != "true" {
+		fmt.Printf("Creating InstaSlice object with name %v", r.NodeName)
+		_, errForDiscoveringGpus := r.discoverMigEnabledGpuWithSlices()
+		if errForDiscoveringGpus != nil {
+			return errForDiscoveringGpus
 		}
 	}
 	//r.discoverExistingSlice()
