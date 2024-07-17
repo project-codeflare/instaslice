@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -139,6 +140,11 @@ func (r *InstasliceReconciler) findDeviceForASlice(ctx context.Context, instasli
 			instaslice.Spec.Allocations = make(map[string]inferencev1alpha1.AllocationDetails)
 		}
 		newStart := r.getStartIndexFromPreparedState(instaslice, gpuUUID, profileName)
+		notValidIndex := uint32(8)
+		if newStart == notValidIndex {
+			//Move to next GPU
+			continue
+		}
 		size, discoveredGiprofile, Ciprofileid, Ciengprofileid := r.extractGpuProfile(instaslice, profileName)
 		allocDetails := policy.SetAllocationDetails(profileName, uint32(newStart), uint32(size),
 			string(pod.UID), instaslice.Name, "no", discoveredGiprofile,
@@ -150,7 +156,7 @@ func (r *InstasliceReconciler) findDeviceForASlice(ctx context.Context, instasli
 		}
 		return gpuUUID, false, reconcile.Result{}, nil
 	}
-	return gpuUUID, false, reconcile.Result{}, nil
+	return "", false, reconcile.Result{}, fmt.Errorf("No valid GPU found that can fit slice")
 }
 
 // Extract profile name from the container limits spec
@@ -192,7 +198,7 @@ func (*InstasliceReconciler) extractGpuProfile(instaslice inferencev1alpha1.Inst
 }
 
 func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice inferencev1alpha1.Instaslice, gpuUUID string, profileName string) uint32 {
-
+	//TODO: generalize, A100 and H100 have 7 profiles so it hardwired for now
 	var gpuAllocatedIndex [7]uint32
 	// Explicitly set the array to all zeros
 	for i := range gpuAllocatedIndex {
@@ -218,7 +224,9 @@ func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice inference
 			break
 		}
 	}
-	var newStart uint32
+	//TODO: generalize, no slices can be placed on 8th index
+	//if we return 8 then assume no valid index is found.
+	var newStart = uint32(8)
 	for _, value := range possiblePlacements {
 		if gpuAllocatedIndex[value] == 0 {
 			if neededContinousSlot == 1 {
