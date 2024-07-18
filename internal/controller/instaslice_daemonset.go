@@ -492,7 +492,9 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 	if err := r.setupWithManager(mgr); err != nil {
 		return err
 	}
-	//Make InstaSlice object when it does not exists.
+
+	//make InstaSlice object when it does not exists
+	//if it got restarted then use the existing state.
 	done := make(chan struct{})
 	nodeName := os.Getenv("NODE_NAME")
 	go func() {
@@ -501,8 +503,9 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 		<-mgr.Elected()
 		var instaslice inferencev1alpha1.Instaslice
 		typeNamespacedName := types.NamespacedName{
-			Name:      nodeName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Name: nodeName,
+			//TODO: change namespace
+			Namespace: "default",
 		}
 		err := r.Get(context.TODO(), typeNamespacedName, &instaslice)
 		if err != nil {
@@ -521,12 +524,13 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 		<-done
 		// Processing to be done after the Goroutine has finished
 		fmt.Printf("Discovery finished.")
-		// Add your further processing logic here
 	}()
 
 	return nil
 }
 
+// Enable creation of controller caches to talk to the API server in order to perform
+// object discovery in SetupWithManager
 func (r *InstaSliceDaemonsetReconciler) setupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1.Pod{}).Named("InstaSliceDaemonSet").
