@@ -1,6 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= asm582/instaslicev2-controller:latest
 IMG_DMST ?= asm582/instaslicev2-daemonset:latest
+
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.29.0
 
@@ -16,6 +17,13 @@ endif
 # scaffolded by default. However, you might want to replace it to use other
 # tools. (i.e. podman)
 CONTAINER_TOOL ?= docker
+
+ifeq ($(CONTAINER_TOOL),podman)
+MULTI_ARCH_OPTION=--manifest
+else
+MULTI_ARCH_OPTION=--push --provenance=false --tag
+endif
+
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -93,11 +101,11 @@ build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/daemonset cmd/daemonset/main.go
 .PHONY: run-controller
 run-controller: manifests generate fmt vet ## Run a controller from your host.
-	sudo -E go run ./cmd/controller/main.go 
+	sudo -E go run ./cmd/controller/main.go
 
 .PHONY: run-daemonset
 run-daemonset: manifests generate fmt vet ## Run a controller from your host.
-	sudo -E go run ./cmd/daemonset/main.go 
+	sudo -E go run ./cmd/daemonset/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
@@ -113,21 +121,23 @@ docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG_DMST}
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
-# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
-# - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
-# - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
-# - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
-# To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+# architectures. Make sure that base image in the Dockerfile/Containerfile is itself multi-platform, and includes
+# the requested plaforms. Unlike "docker buildx", for multi-platform images podman requires creating a manifest.
+PLATFORMS ?= linux/arm64,linux/amd64
 .PHONY: docker-buildx
-docker-buildx: ## Build and push docker image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
-	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name project-v3-builder
-	$(CONTAINER_TOOL) buildx use project-v3-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm project-v3-builder
-	rm Dockerfile.cross
+docker-buildx: ## Build and push docker images with multi-platform support
+	if [ "$(CONTAINER_TOOL)" == "podman" ]; then \
+	  $(CONTAINER_TOOL) manifest rm ${IMG} || true; \
+	  $(CONTAINER_TOOL) manifest create ${IMG}; \
+	  $(CONTAINER_TOOL) manifest rm ${IMG_DMST} || true; \
+	  $(CONTAINER_TOOL) manifest create ${IMG_DMST}; \
+	fi
+	DOCKER_BUILDKIT=1 $(CONTAINER_TOOL) buildx build --platform=$(PLATFORMS) $(MULTI_ARCH_OPTION) ${IMG} -f Dockerfile.controller .
+	DOCKER_BUILDKIT=1 $(CONTAINER_TOOL) buildx build --platform=$(PLATFORMS) $(MULTI_ARCH_OPTION) ${IMG_DMST} -f Dockerfile.daemonset .
+	if [ "$(CONTAINER_TOOL)" == "podman" ]; then \
+	  $(CONTAINER_TOOL) manifest push ${IMG}; \
+	  $(CONTAINER_TOOL) manifest push ${IMG_DMST}; \
+	fi
 
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
