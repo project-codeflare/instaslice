@@ -1,13 +1,10 @@
+ARG CUDA_VERSION=12.4.1
+ARG BASE_DIST=ubi8
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-base-${BASE_DIST} AS build
+
 ARG GOLANG_VERSION=1.22.2
-FROM nvidia/cuda:12.4.1-base-ubuntu22.04 as build
+RUN yum install -y wget make git gcc
 
-RUN apt-get update && \
-    apt-get install -y wget make git gcc \
-    && \
-    rm -rf /var/lib/apt/lists/*
-
-ARG GOLANG_VERSION=x.x.x
-#TODO: Remove arch discovery
 RUN set -eux; \
     \
     arch="$(uname -m)"; \
@@ -17,7 +14,7 @@ RUN set -eux; \
         aarch64) ARCH='arm64' ;; \
         *) echo "unsupported architecture" ; exit 1 ;; \
     esac; \
-       wget -nv -O - https://storage.googleapis.com/golang/go1.22.2.linux-amd64.tar.gz \
+       wget -nv -O - https://storage.googleapis.com/golang/go${GOLANG_VERSION}.linux-${ARCH}.tar.gz \
     | tar -C /usr/local -xz
 
 ENV GOPATH /go
@@ -43,11 +40,12 @@ COPY internal/controller/instaslice_controller.go internal/controller/instaslice
 # by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
 RUN go build -o bin/manager cmd/controller/main.go
 
-FROM nvidia/cuda:12.4.1-base-ubuntu22.04
+ARG CUDA_VERSION=12.4.1
+ARG BASE_DIST=ubi8
+FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-base-${BASE_DIST}
 
 # Remove CUDA libs(compat etc) in favor of libs installed by the NVIDIA driver
-RUN rm -f cuda-*.deb
-RUN apt-get --purge -y autoremove cuda-*
+RUN dnf remove -y cuda-*
 
 ENV NVIDIA_DISABLE_REQUIRE="true"
 ENV NVIDIA_VISIBLE_DEVICES=all
@@ -60,9 +58,8 @@ COPY --from=build /workspace/bin/manager .
 # Install / upgrade packages here that are required to resolve CVEs
 ARG CVE_UPDATES
 RUN if [ -n "${CVE_UPDATES}" ]; then \
-        rm -f /etc/apt/sources.list.d/cuda.list && \
-        apt-get update && apt-get upgrade -y ${CVE_UPDATES} && \
-        rm -rf /var/lib/apt/lists/*; \
+        yum update -y ${CVE_UPDATES} && \
+        rm -rf /var/cache/yum/*; \
     fi
 
 ENTRYPOINT ["/manager"]

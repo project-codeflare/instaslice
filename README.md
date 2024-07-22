@@ -9,6 +9,7 @@ Experimental InstaSlice works with GPU operator to create mig slices on demand.
 ### Prerequisites
 - [Go](https://go.dev/doc/install) v1.22.0+
 - [Docker](https://docs.docker.com/get-docker/) v17.03+
+- [Docker buildx plugin](https://github.com/docker/buildx) for building cross-platform images.
 - [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl) v1.11.3+.
 - Access to a [KinD](https://kind.sigs.k8s.io/docs/user/quick-start/) cluster.
 
@@ -42,7 +43,7 @@ Experimental InstaSlice works with GPU operator to create mig slices on demand.
 |==================+==================================+===========+=======================|
 |  No MIG devices found                                                                   |
 +-----------------------------------------------------------------------------------------+
-                                                                                         
+
 +-----------------------------------------------------------------------------------------+
 | Processes:                                                                              |
 |  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
@@ -77,7 +78,7 @@ nvidia-operator-validator-kh6jf                                   1/1     Runnin
 
 ```sh
 (base) openstack@netsres62:~/asmalvan/instaslice2$ nvidia-smi
-Thu Apr 25 10:08:24 2024       
+Thu Apr 25 10:08:24 2024
 +-----------------------------------------------------------------------------------------+
 | NVIDIA-SMI 550.54.14              Driver Version: 550.54.14      CUDA Version: 12.4     |
 |-----------------------------------------+------------------------+----------------------+
@@ -125,7 +126,7 @@ Thu Apr 25 10:08:24 2024
 |  1   10   0   3  |              12MiB /  4864MiB    | 14      0 |  1   0    0    0    0 |
 |                  |                 0MiB /  8191MiB  |           |                       |
 +------------------+----------------------------------+-----------+-----------------------+
-                                                                                         
+
 +-----------------------------------------------------------------------------------------+
 | Processes:                                                                              |
 |  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
@@ -133,7 +134,7 @@ Thu Apr 25 10:08:24 2024
 |=========================================================================================|
 |  No running processes found                                                             |
 +-----------------------------------------------------------------------------------------+
-(base) openstack@netsres62:~/asmalvan/instaslice2$ 
+(base) openstack@netsres62:~/asmalvan/instaslice2$
 ```
 
 
@@ -239,7 +240,7 @@ Done
 |  1    2   0   0  |              37MiB / 19968MiB    | 42      0 |  3   0    2    0    0 |
 |                  |                 0MiB / 32767MiB  |           |                       |
 +------------------+----------------------------------+-----------+-----------------------+
-                                                                                         
+
 +-----------------------------------------------------------------------------------------+
 | Processes:                                                                              |
 |  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
@@ -285,7 +286,7 @@ kubectl delete pod cuda-vectoradd-5
 |  1    2   0   0  |              37MiB / 19968MiB    | 42      0 |  3   0    2    0    0 |
 |                  |                 0MiB / 32767MiB  |           |                       |
 +------------------+----------------------------------+-----------+-----------------------+
-                                                                                         
+
 +-----------------------------------------------------------------------------------------+
 | Processes:                                                                              |
 |  GPU   GI   CI        PID   Type   Process name                              GPU Memory |
@@ -300,7 +301,20 @@ kubectl delete pod cuda-vectoradd-5
 
 **All in one command**
 
-make docker-build && make docker-push && make deploy 
+make docker-build && make docker-push && make deploy
+
+Cross-platform or multi-arch images can be built and pushed using
+`make docker-buildx`. When using Docker as your container tool, make
+sure to create a builder instance. Refer to
+[Multi-platform images](https://docs.docker.com/build/building/multi-platform/)
+for documentation on building mutli-platform images with Docker.
+
+You can change the destination platform(s) by
+setting `PLATFORMS`, e.g.
+
+```sh
+PLATFORMS=linux/arm64,linux/amd64 make docker-buildx
+```
 
 **Build and push your image to the location specified by `IMG`:**
 
