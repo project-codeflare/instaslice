@@ -36,6 +36,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	nvdevice "github.com/NVIDIA/go-nvlib/pkg/nvlib/device"
@@ -496,29 +497,32 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 	//make InstaSlice object when it does not exists
 	//if it got restarted then use the existing state.
 	nodeName := os.Getenv("NODE_NAME")
-	//if race condition exists use sync.Waitgroup
-	go func() {
-		//Wait till manager is elected and internal caches are set
-		//query API server
-		<-mgr.Elected()
+
+	//Init InstaSlice obj as the first thing when cache is loaded.
+	//RunnableFunc is added to the manager.
+	//This function waits for the manager to be elected (<-mgr.Elected()) and then InstaSlice init code.
+	mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		<-mgr.Elected() // Wait for the manager to be elected
 		var instaslice inferencev1alpha1.Instaslice
 		typeNamespacedName := types.NamespacedName{
 			Name: nodeName,
 			//TODO: change namespace
 			Namespace: "default",
 		}
-		err := r.Get(context.TODO(), typeNamespacedName, &instaslice)
-		if err != nil {
-			fmt.Printf("unable to fetch InstaSlice resource %v\n", err)
+		errRetrievingInstaSliceForSetup := r.Get(context.TODO(), typeNamespacedName, &instaslice)
+		if errRetrievingInstaSliceForSetup != nil {
+			fmt.Printf("unable to fetch InstaSlice resource for node name %v which has error %v\n", nodeName, errRetrievingInstaSliceForSetup)
+			//TODO: should we do hard exit?
+			//os.Exit(1)
 		}
-		if instaslice.Status.Processed != "true" {
+		if instaslice.Status.Processed != "true" || (instaslice.Name == "" && instaslice.Namespace == "") {
 			_, errForDiscoveringGpus := r.discoverMigEnabledGpuWithSlices()
 			if errForDiscoveringGpus != nil {
 				fmt.Printf("Error %v", errForDiscoveringGpus)
 			}
 		}
-
-	}()
+		return nil
+	}))
 
 	return nil
 }
