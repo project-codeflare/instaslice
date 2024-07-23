@@ -495,8 +495,8 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 
 	//make InstaSlice object when it does not exists
 	//if it got restarted then use the existing state.
-	done := make(chan struct{})
 	nodeName := os.Getenv("NODE_NAME")
+	//if race condition exists use sync.Waitgroup
 	go func() {
 		//Wait till manager is elected and internal caches are set
 		//query API server
@@ -518,12 +518,6 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 			}
 		}
 
-	}()
-	//barrier before processing the workload when InstaSlice object does not exists.
-	go func() {
-		<-done
-		// Processing to be done after the Goroutine has finished
-		fmt.Printf("Discovery finished.")
 	}()
 
 	return nil
