@@ -500,7 +500,7 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 
 	//Init InstaSlice obj as the first thing when cache is loaded.
 	//RunnableFunc is added to the manager.
-	//This function waits for the manager to be elected (<-mgr.Elected()) and then InstaSlice init code.
+	//This function waits for the manager to be elected (<-mgr.Elected()) and then runs InstaSlice init code.
 	mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		<-mgr.Elected() // Wait for the manager to be elected
 		var instaslice inferencev1alpha1.Instaslice
