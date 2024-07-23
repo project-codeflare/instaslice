@@ -36,6 +36,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	nvdevice "github.com/NVIDIA/go-nvlib/pkg/nvlib/device"
@@ -47,6 +48,7 @@ type InstaSliceDaemonsetReconciler struct {
 	client.Client
 	Scheme     *runtime.Scheme
 	kubeClient *kubernetes.Clientset
+	NodeName   string
 }
 
 //+kubebuilder:rbac:groups=inference.codeflare.dev,resources=instaslices,verbs=get;list;watch;create;update;patch;delete
@@ -236,10 +238,13 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 		if errGettingobj != nil {
 			fmt.Printf("Error getting instaslice obj %v", errGettingobj)
 		}
-		_, updatedAllocation := r.updateAllocationProcessing(instaslice, deviceUUID, profileName)
-		r.createPreparedEntry(profileName, placement, podUUID, deviceUUID, pod, giId, ciId, instaslice, migUUID, updatedAllocation)
 
-		createConfigMap(context.TODO(), r.Client, migUUID, updatedAllocation.Namespace, updatedAllocation.PodName, logger)
+		existingAllocations := instaslice.Spec.Allocations[podUUID]
+		existingAllocations.Processed = "true"
+		instaslice.Spec.Allocations[podUUID] = existingAllocations
+		r.createPreparedEntry(profileName, placement, podUUID, deviceUUID, pod, giId, ciId, instaslice, migUUID)
+
+		r.createConfigMap(context.TODO(), r.Client, migUUID, existingAllocations.Namespace, existingAllocations.PodName, logger)
 
 		podUpdate := r.labelsForDaemonset(pod)
 		// Retry update operation with backoff
@@ -413,7 +418,8 @@ func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, pod *v1.Pod
 	}
 }
 
-func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, placement nvml.GpuInstancePlacement, podUUID string, deviceUUID string, pod *v1.Pod, giId uint32, ciId uint32, instaslice *inferencev1alpha1.Instaslice, migUUID string, updatedAllocation inferencev1alpha1.AllocationDetails) {
+func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, placement nvml.GpuInstancePlacement, podUUID string, deviceUUID string, pod *v1.Pod, giId uint32, ciId uint32, instaslice *inferencev1alpha1.Instaslice, migUUID string) {
+	updatedAllocation := instaslice.Spec.Allocations[podUUID]
 	instaslicePrepared := inferencev1alpha1.PreparedDetails{
 		Profile:  profileName,
 		Start:    updatedAllocation.Start,
@@ -427,30 +433,12 @@ func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(profileName string, 
 		instaslice.Spec.Prepared = make(map[string]inferencev1alpha1.PreparedDetails)
 	}
 	instaslice.Spec.Prepared[migUUID] = instaslicePrepared
-	instaslice.Spec.Allocations[podUUID] = updatedAllocation
 
 	errForUpdate := r.Update(context.TODO(), instaslice)
 
 	if errForUpdate != nil {
 		fmt.Printf("Error updating object %v", errForUpdate)
 	}
-}
-
-func (*InstaSliceDaemonsetReconciler) updateAllocationProcessing(instaslice *inferencev1alpha1.Instaslice, podUUID string, profileName string) (inferencev1alpha1.AllocationDetails, inferencev1alpha1.AllocationDetails) {
-	existingAllocations := instaslice.Spec.Allocations[podUUID]
-	updatedAllocation := inferencev1alpha1.AllocationDetails{
-		Profile:     profileName,
-		Start:       existingAllocations.Start,
-		Size:        existingAllocations.Size,
-		PodUUID:     existingAllocations.PodUUID,
-		Nodename:    existingAllocations.Nodename,
-		Giprofileid: existingAllocations.Giprofileid,
-		Processed:   "yes",
-		Namespace:   existingAllocations.Namespace,
-		PodName:     existingAllocations.PodName,
-		GPUUUID:     existingAllocations.GPUUUID,
-	}
-	return existingAllocations, updatedAllocation
 }
 
 // Reloads the configuration in the device plugin to update node capacity
@@ -502,12 +490,46 @@ func (r *InstaSliceDaemonsetReconciler) SetupWithManager(mgr ctrl.Manager) error
 	if err != nil {
 		return err
 	}
-
-	_, errForDiscoveringGpus := r.discoverMigEnabledGpuWithSlices()
-	if errForDiscoveringGpus != nil {
-		return errForDiscoveringGpus
+	if err := r.setupWithManager(mgr); err != nil {
+		return err
 	}
-	//r.discoverExistingSlice()
+
+	//make InstaSlice object when it does not exists
+	//if it got restarted then use the existing state.
+	nodeName := os.Getenv("NODE_NAME")
+
+	//Init InstaSlice obj as the first thing when cache is loaded.
+	//RunnableFunc is added to the manager.
+	//This function waits for the manager to be elected (<-mgr.Elected()) and then runs InstaSlice init code.
+	mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		<-mgr.Elected() // Wait for the manager to be elected
+		var instaslice inferencev1alpha1.Instaslice
+		typeNamespacedName := types.NamespacedName{
+			Name: nodeName,
+			//TODO: change namespace
+			Namespace: "default",
+		}
+		errRetrievingInstaSliceForSetup := r.Get(context.TODO(), typeNamespacedName, &instaslice)
+		if errRetrievingInstaSliceForSetup != nil {
+			fmt.Printf("unable to fetch InstaSlice resource for node name %v which has error %v\n", nodeName, errRetrievingInstaSliceForSetup)
+			//TODO: should we do hard exit?
+			//os.Exit(1)
+		}
+		if instaslice.Status.Processed != "true" || (instaslice.Name == "" && instaslice.Namespace == "") {
+			_, errForDiscoveringGpus := r.discoverMigEnabledGpuWithSlices()
+			if errForDiscoveringGpus != nil {
+				fmt.Printf("Error %v", errForDiscoveringGpus)
+			}
+		}
+		return nil
+	}))
+
+	return nil
+}
+
+// Enable creation of controller caches to talk to the API server in order to perform
+// object discovery in SetupWithManager
+func (r *InstaSliceDaemonsetReconciler) setupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1.Pod{}).Named("InstaSliceDaemonSet").
 		Complete(r)
@@ -552,7 +574,7 @@ func (r *InstaSliceDaemonsetReconciler) discoverMigEnabledGpuWithSlices() ([]str
 	return discoveredGpusOnHost, nil
 }
 
-func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*inferencev1alpha1.Instaslice, nvml.Return, map[string]string, bool, []string, error) {
+func (r *InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*inferencev1alpha1.Instaslice, nvml.Return, map[string]string, bool, []string, error) {
 	instaslice := &inferencev1alpha1.Instaslice{}
 	ret := nvml.Init()
 	if ret != nvml.SUCCESS {
@@ -630,7 +652,7 @@ func (*InstaSliceDaemonsetReconciler) discoverAvailableProfilesOnGpus() (*infere
 	return instaslice, ret, gpuModelMap, false, nil, nil
 }
 
-func (*InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferencev1alpha1.Instaslice) error {
+func (r *InstaSliceDaemonsetReconciler) discoverDanglingSlices(instaslice *inferencev1alpha1.Instaslice) error {
 	h := &deviceHandler{}
 	h.nvml = nvml.New()
 	h.nvdevice = nvdevice.New(nvdevice.WithNvml(h.nvml))
@@ -760,7 +782,7 @@ func (m MigProfile) Attributes() []string {
 }
 
 // Create configmap which is used by Pods to consume MIG device
-func createConfigMap(ctx context.Context, k8sClient client.Client, migGPUUUID string, namespace string, podName string, logger logr.Logger) error {
+func (r *InstaSliceDaemonsetReconciler) createConfigMap(ctx context.Context, k8sClient client.Client, migGPUUUID string, namespace string, podName string, logger logr.Logger) error {
 	configMap := &v1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,

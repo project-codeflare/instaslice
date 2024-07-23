@@ -140,7 +140,8 @@ func (r *InstasliceReconciler) findDeviceForASlice(ctx context.Context, instasli
 			instaslice.Spec.Allocations = make(map[string]inferencev1alpha1.AllocationDetails)
 		}
 		newStart := r.getStartIndexFromPreparedState(instaslice, gpuUUID, profileName)
-		notValidIndex := uint32(8)
+		//size cannot be 9 atleast for A100s 40GB/80GB and H100 variants
+		notValidIndex := uint32(9)
 		if newStart == notValidIndex {
 			//Move to next GPU
 			continue
@@ -197,10 +198,12 @@ func (*InstasliceReconciler) extractGpuProfile(instaslice inferencev1alpha1.Inst
 	return size, discoveredGiprofile, Ciprofileid, Ciengprofileid
 }
 
+// accounting logic that finds the correct GPU and index where a slice could be placed.
 func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice inferencev1alpha1.Instaslice, gpuUUID string, profileName string) uint32 {
-	//TODO: generalize, A100 and H100 have 7 profiles so it hardwired for now
-	var gpuAllocatedIndex [7]uint32
-	// Explicitly set the array to all zeros
+	//TODO: generalize, A100 and H100 have 8 indexes for 3g and 7g and 7 for rest, so go with 8 and we are bounded by
+	//only valid placement indexes for a profile.
+	var gpuAllocatedIndex [8]uint32
+	// clean slate init
 	for i := range gpuAllocatedIndex {
 		gpuAllocatedIndex[i] = 0
 	}
@@ -224,9 +227,9 @@ func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice inference
 			break
 		}
 	}
-	//TODO: generalize, no slices can be placed on 8th index
-	//if we return 8 then assume no valid index is found.
-	var newStart = uint32(8)
+	//TODO: generalize for other hardware models like A30, no slices can be placed on 9th index
+	//if we return 9 then assume no valid index is found.
+	var newStart = uint32(9)
 	for _, value := range possiblePlacements {
 		if gpuAllocatedIndex[value] == 0 {
 			if neededContinousSlot == 1 {
@@ -253,7 +256,7 @@ func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice inference
 
 			if neededContinousSlot == 8 {
 				//special case
-				if value+neededContinousSlot-1 < len(gpuAllocatedIndex) {
+				if value+neededContinousSlot < len(gpuAllocatedIndex) {
 					if gpuAllocatedIndex[value] == 0 && gpuAllocatedIndex[value+1] == 0 &&
 						gpuAllocatedIndex[value+2] == 0 && gpuAllocatedIndex[value+3] == 0 &&
 						gpuAllocatedIndex[value+4] == 0 && gpuAllocatedIndex[value+5] == 0 &&

@@ -136,7 +136,7 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "InstaSliceDaemonsetReconciler")
-		os.Exit(1)
+		//os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
 
