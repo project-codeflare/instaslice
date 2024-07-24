@@ -41,7 +41,7 @@ type AllocationDetails struct {
 	PodUUID          string `json:"podUUID"`
 	GPUUUID          string `json:"gpuUUID"`
 	Nodename         string `json:"nodename"`
-	Allocationstatus string `json:"Allocationstatus"`
+	Allocationstatus string `json:"allocationStatus"`
 	Giprofileid      int    `json:"giprofileid"`
 	CIProfileID      int    `json:"ciProfileid"`
 	CIEngProfileID   int    `json:"ciengprofileid"`

@@ -131,6 +131,9 @@ func (r *InstasliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 
 		//Assume pod only has one container with one GPU requests
+		if len(pod.Spec.Containers) != 1 {
+			return ctrl.Result{}, fmt.Errorf("multiple containers per pod not supported")
+		}
 		limits := pod.Spec.Containers[0].Resources.Limits
 		profileName := r.extractProfileName(limits)
 		logger.Info("The profile name obtained", "name", profileName)

@@ -47,7 +47,7 @@ spec:
                 additionalProperties:
                   description: Define the struct for allocation details
                   properties:
-                    Allocationstatus:
+                    allocationStatus:
                       type: string
                     ciProfileid:
                       type: integer
@@ -74,7 +74,7 @@ spec:
                       format: int32
                       type: integer
                   required:
-                  - Allocationstatus
+                  - allocationStatus
                   - ciProfileid
                   - ciengprofileid
                   - giprofileid
