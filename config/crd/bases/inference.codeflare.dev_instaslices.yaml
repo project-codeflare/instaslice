@@ -47,6 +47,8 @@ spec:
                 additionalProperties:
                   description: Define the struct for allocation details
                   properties:
+                    Allocationstatus:
+                      type: string
                     ciProfileid:
                       type: integer
                     ciengprofileid:
@@ -63,8 +65,6 @@ spec:
                       type: string
                     podUUID:
                       type: string
-                    processed:
-                      type: string
                     profile:
                       type: string
                     size:
@@ -74,6 +74,7 @@ spec:
                       format: int32
                       type: integer
                   required:
+                  - Allocationstatus
                   - ciProfileid
                   - ciengprofileid
                   - giprofileid
@@ -82,7 +83,6 @@ spec:
                   - nodename
                   - podName
                   - podUUID
-                  - processed
                   - profile
                   - size
                   - start
