@@ -21,16 +21,18 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	inferencev1alpha1 "codeflare.dev/instaslice/api/v1alpha1"
-	"github.com/go-logr/logr"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -53,21 +55,14 @@ type LeftToRightPolicy struct{}
 
 type FirstFitPolicy struct{}
 
+// TODO: remove this and find a better way to reduce duplicates update via controller runtime
+var processedPodDeletion []string
+
 //+kubebuilder:rbac:groups=inference.codeflare.dev,resources=instaslices,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=inference.codeflare.dev,resources=instaslices/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=inference.codeflare.dev,resources=instaslices/finalizers,verbs=update
 //+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;create;update;patch;delete
-
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Instaslice object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.2/pkg/reconcile
 
 func (r *InstasliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
@@ -75,7 +70,6 @@ func (r *InstasliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	var policy AllocationPolicy
 	policy = &FirstFitPolicy{}
 	pod := &v1.Pod{}
-	//var podName string
 	var isPodGated = false
 	err := r.Get(ctx, req.NamespacedName, pod)
 	if err != nil {
@@ -89,57 +83,98 @@ func (r *InstasliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	isPodGated = checkIfPodGated(pod, isPodGated)
 
-	if pod.Labels != nil && pod.Labels["processedbydeamonset"] == "true" {
-		r.unGatePod(context.TODO(), pod.Name, req, pod, logger)
+	var instasliceList inferencev1alpha1.InstasliceList
+
+	if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
+		logger.Error(err, "Error listing Instaslice")
+	}
+	// handles graceful termination of pods, wait for about 30 seconds from the time deletiontimestamp is set on the pod
+	if !pod.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(pod, "org.instaslice/accelarator") && isPodDeletionProcessed(pod.Name, processedPodDeletion) {
+			for _, instaslice := range instasliceList.Items {
+				for podUuid, allocation := range instaslice.Spec.Allocations {
+					if podUuid == string(pod.UID) {
+						elapsed := time.Since(pod.DeletionTimestamp.Time)
+						if elapsed > 30*time.Second {
+							if controllerutil.RemoveFinalizer(pod, "org.instaslice/accelarator") {
+								if err := r.Update(ctx, pod); err != nil {
+									return ctrl.Result{}, err
+								}
+								logger.Info("finalizer deleted")
+							}
+							allocation.Allocationstatus = "deleted"
+							instaslice.Spec.Allocations[podUuid] = allocation
+							err := r.Update(ctx, &instaslice)
+							if errors.IsConflict(err) {
+								//not retrying as daemonset might be updating the instaslice object for other pods
+								logger.Info("Latest version for instaslice object not found, retrying in next iteration")
+								return ctrl.Result{Requeue: true}, nil
+							}
+							if err != nil {
+								logger.Info("allocation set to deleted for", "pod", pod.Name)
+								processedPodDeletion = append(processedPodDeletion, pod.Name)
+							}
+						} else {
+							remainingTime := 30*time.Second - elapsed
+							return ctrl.Result{RequeueAfter: remainingTime}, nil
+						}
+					}
+				}
+
+			}
+		}
+		//exit after handling deletion event for a pod.
+		return ctrl.Result{}, nil
 	}
 
-	if pod.Labels != nil && pod.Labels["processedbycontroller"] == "true" {
-		return ctrl.Result{}, err
-	}
-
+	// find allocation in the cluster for the pod
+	// set allocationstatus to creating when controller adds the allocation
+	// check for allocationstatus as created when daemonset is done realizing the slice on the GPU node.
+	// set allocationstatus to ungated and ungate the pod so that the workload can begin execution.
 	if isPodGated {
 		//Assume pod only has one container with one GPU requests
+		if len(pod.Spec.Containers) != 1 {
+			return ctrl.Result{}, fmt.Errorf("multiple containers per pod not supported")
+		}
 		limits := pod.Spec.Containers[0].Resources.Limits
 		profileName := r.extractProfileName(limits)
-		logger.Info("The profile name obtained", "name", profileName)
-		// List all instances
-		var instasliceList inferencev1alpha1.InstasliceList
-
-		if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
-			logger.Error(err, "Error listing Instaslice")
-		}
-
 		for _, instaslice := range instasliceList.Items {
-			//TODO:Avoid empty GPU string
-			var gpuUUID = ""
-			gpuUUID, reportError, result, errSelectingDevice := r.findDeviceForASlice(ctx, instaslice, gpuUUID, profileName, policy, pod, logger)
-			if reportError {
-				return result, errSelectingDevice
-			}
-			r.addLabelsToCreateSlice(pod, instaslice.Name, gpuUUID)
-			// Retry update operation with backoff
-			retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-				return r.Client.Update(ctx, pod)
-			})
-			if retryErr != nil {
-				return ctrl.Result{}, retryErr
-			}
-			logger.Info("Done adding label to the pod")
-			return ctrl.Result{}, nil
-		}
-	}
+			for podUuid, allocations := range instaslice.Spec.Allocations {
+				if allocations.Allocationstatus == "created" && allocations.PodUUID == string(pod.UID) {
+					pod := r.unGatePod(pod)
+					errForUngating := r.Update(ctx, pod)
+					if errors.IsConflict(errForUngating) {
+						//pod updates are retried as controller is the only entiting working on pod updates.
+						return ctrl.Result{Requeue: true}, nil
+					}
+					allocations.Allocationstatus = "ungated"
+					instaslice.Spec.Allocations[podUuid] = allocations
+				}
 
+			}
+			//pod does not have an allocation yet, make allocation
+			if _, exists := instaslice.Spec.Allocations[string(pod.UID)]; !exists {
+				r.findDeviceForASlice(&instaslice, profileName, policy, pod)
+			}
+			//update all created allocations belonging to different pods to state ungated
+			if err := r.Update(ctx, &instaslice); err != nil {
+				logger.Error(err, "Error updating instaslice allocations")
+				return ctrl.Result{}, err
+			}
+		}
+
+	}
+	// no gated pod found, do nothing
 	return ctrl.Result{}, nil
 }
 
-func (r *InstasliceReconciler) findDeviceForASlice(ctx context.Context, instaslice inferencev1alpha1.Instaslice, gpuUUID string, profileName string, policy AllocationPolicy, pod *v1.Pod, logger logr.Logger) (string, bool, reconcile.Result, error) {
+func (r *InstasliceReconciler) findDeviceForASlice(instaslice *inferencev1alpha1.Instaslice, profileName string, policy AllocationPolicy, pod *v1.Pod) (*inferencev1alpha1.Instaslice, error) {
 	//TODO: discover this value, this may work for A100 and H100 for now.
 	for gpuuuid, _ := range instaslice.Spec.MigGPUUUID {
-		gpuUUID = gpuuuid
 		if instaslice.Spec.Allocations == nil {
 			instaslice.Spec.Allocations = make(map[string]inferencev1alpha1.AllocationDetails)
 		}
-		newStart := r.getStartIndexFromPreparedState(instaslice, gpuUUID, profileName)
+		newStart := r.getStartIndexFromPreparedState(instaslice, gpuuuid, profileName)
 		//size cannot be 9 atleast for A100s 40GB/80GB and H100 variants
 		notValidIndex := uint32(9)
 		if newStart == notValidIndex {
@@ -148,16 +183,13 @@ func (r *InstasliceReconciler) findDeviceForASlice(ctx context.Context, instasli
 		}
 		size, discoveredGiprofile, Ciprofileid, Ciengprofileid := r.extractGpuProfile(instaslice, profileName)
 		allocDetails := policy.SetAllocationDetails(profileName, uint32(newStart), uint32(size),
-			string(pod.UID), instaslice.Name, "no", discoveredGiprofile,
-			Ciprofileid, Ciengprofileid, pod.Namespace, pod.Name, gpuUUID)
+			string(pod.UID), instaslice.Name, "creating", discoveredGiprofile,
+			Ciprofileid, Ciengprofileid, pod.Namespace, pod.Name, gpuuuid)
 		instaslice.Spec.Allocations[string(pod.UID)] = *allocDetails
-		if err := r.Update(ctx, &instaslice); err != nil {
-			logger.Error(err, "Error updating instaslice allocations")
-			return "", true, ctrl.Result{}, err
-		}
-		return gpuUUID, false, reconcile.Result{}, nil
+		return instaslice, nil
 	}
-	return "", false, reconcile.Result{}, fmt.Errorf("No valid GPU found that can fit slice")
+
+	return instaslice, fmt.Errorf("failed to update instaslice object to state - creating")
 }
 
 // Extract profile name from the container limits spec
@@ -179,7 +211,7 @@ func (*InstasliceReconciler) extractProfileName(limits v1.ResourceList) string {
 }
 
 // Extract NVML specific attributes for GPUs, this will change for different generations of the GPU.
-func (*InstasliceReconciler) extractGpuProfile(instaslice inferencev1alpha1.Instaslice, profileName string) (int, int, int, int) {
+func (*InstasliceReconciler) extractGpuProfile(instaslice *inferencev1alpha1.Instaslice, profileName string) (int, int, int, int) {
 	var size int
 	var discoveredGiprofile int
 	var Ciprofileid int
@@ -199,7 +231,7 @@ func (*InstasliceReconciler) extractGpuProfile(instaslice inferencev1alpha1.Inst
 }
 
 // accounting logic that finds the correct GPU and index where a slice could be placed.
-func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice inferencev1alpha1.Instaslice, gpuUUID string, profileName string) uint32 {
+func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice *inferencev1alpha1.Instaslice, gpuUUID string, profileName string) uint32 {
 	//TODO: generalize, A100 and H100 have 8 indexes for 3g and 7g and 7 for rest, so go with 8 and we are bounded by
 	//only valid placement indexes for a profile.
 	var gpuAllocatedIndex [8]uint32
@@ -213,6 +245,14 @@ func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice inference
 				gpuAllocatedIndex[int(item.Start)+i] = 1
 			}
 
+		}
+	}
+
+	for _, item := range instaslice.Spec.Allocations {
+		if item.GPUUUID == gpuUUID {
+			for i := 0; i < int(item.Size); i++ {
+				gpuAllocatedIndex[int(item.Start)+i] = 1
+			}
 		}
 	}
 
@@ -272,16 +312,6 @@ func (*InstasliceReconciler) getStartIndexFromPreparedState(instaslice inference
 	return newStart
 }
 
-// Since we dont have user facing CRD, we make our way with attaching labels to the pods to indicate processing status.
-func (*InstasliceReconciler) addLabelsToCreateSlice(pod *v1.Pod, nodeName string, gpuUuid string) {
-	labelMap := make(map[string]string)
-	labelMap["generateslice"] = "true"
-	labelMap["processedbycontroller"] = "true"
-	labelMap["nodeName"] = nodeName
-	labelMap["gpuUUID"] = gpuUuid
-	pod.SetLabels(labelMap)
-}
-
 func checkIfPodGated(pod *v1.Pod, isPodGated bool) bool {
 	for _, gate := range pod.Spec.SchedulingGates {
 		if gate.Name == "org.instaslice/accelarator" {
@@ -291,6 +321,18 @@ func checkIfPodGated(pod *v1.Pod, isPodGated bool) bool {
 		}
 	}
 	return isPodGated
+}
+
+// podMapFunc maps pods to instaslice created allocations
+func (r *InstasliceReconciler) podMapFunc(ctx context.Context, obj client.Object) []reconcile.Request {
+	instaslice := obj.(*inferencev1alpha1.Instaslice)
+	for _, allocation := range instaslice.Spec.Allocations {
+		if allocation.Allocationstatus == "created" || allocation.Allocationstatus == "deleting" {
+			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: allocation.Namespace, Name: allocation.PodName}}}
+		}
+	}
+
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -305,25 +347,18 @@ func (r *InstasliceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1.Pod{}).Named("InstaSlice").
+		For(&v1.Pod{}).Named("InstaSlice-controller").
+		Watches(&inferencev1alpha1.Instaslice{}, handler.EnqueueRequestsFromMapFunc(r.podMapFunc)).
 		Complete(r)
 }
 
-func (r *InstasliceReconciler) unGatePod(ctx context.Context, podName string, req reconcile.Request, podUpdate *v1.Pod, logger logr.Logger) {
-	err := r.Client.Get(ctx, client.ObjectKey{Name: podName, Namespace: req.Namespace}, podUpdate)
-	if err != nil {
-		//TODO: handle error condition
-		logger.Error(err, "Failed to obtain pod from API server")
-	}
+func (r *InstasliceReconciler) unGatePod(podUpdate *v1.Pod) *v1.Pod {
 	for i, gate := range podUpdate.Spec.SchedulingGates {
 		if gate.Name == "org.instaslice/accelarator" {
 			podUpdate.Spec.SchedulingGates = append(podUpdate.Spec.SchedulingGates[:i], podUpdate.Spec.SchedulingGates[i+1:]...)
 		}
 	}
-	errUngating := r.Update(ctx, podUpdate)
-	if errUngating != nil {
-		logger.Error(errUngating, "Failed to ungate the pod")
-	}
+	return podUpdate
 }
 
 // Policy based allocation - FirstFit
@@ -331,18 +366,18 @@ func (r *FirstFitPolicy) SetAllocationDetails(profileName string, newStart, size
 	processed string, discoveredGiprofile int, Ciprofileid int, Ciengprofileid int,
 	namespace string, podName string, gpuUuid string) *inferencev1alpha1.AllocationDetails {
 	return &inferencev1alpha1.AllocationDetails{
-		Profile:        profileName,
-		Start:          uint32(newStart),
-		Size:           uint32(size),
-		PodUUID:        podUUID,
-		Nodename:       nodename,
-		Processed:      processed,
-		Giprofileid:    discoveredGiprofile,
-		CIProfileID:    Ciprofileid,
-		CIEngProfileID: Ciengprofileid,
-		Namespace:      namespace,
-		PodName:        podName,
-		GPUUUID:        gpuUuid,
+		Profile:          profileName,
+		Start:            uint32(newStart),
+		Size:             uint32(size),
+		PodUUID:          podUUID,
+		Nodename:         nodename,
+		Allocationstatus: processed,
+		Giprofileid:      discoveredGiprofile,
+		CIProfileID:      Ciprofileid,
+		CIEngProfileID:   Ciengprofileid,
+		Namespace:        namespace,
+		PodName:          podName,
+		GPUUUID:          gpuUuid,
 	}
 }
 
@@ -360,4 +395,13 @@ func (l *RightToLeftPolicy) SetAllocationDetails(profileName string, newStart, s
 	namespace string, podName string, gpuUuid string) *inferencev1alpha1.AllocationDetails {
 	// Implement the left-to-right policy here
 	return &inferencev1alpha1.AllocationDetails{}
+}
+
+func isPodDeletionProcessed(str string, arr []string) bool {
+	for _, v := range arr {
+		if v == str {
+			return false
+		}
+	}
+	return true
 }
