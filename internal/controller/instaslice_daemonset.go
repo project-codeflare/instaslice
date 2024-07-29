@@ -84,6 +84,8 @@ const (
 	AttributeMediaExtensions = "me"
 )
 
+var processedAllocation []string
+
 func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 	logger := log.Log.WithName("InstaSlice-daemonset")
@@ -97,16 +99,13 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 		nodeName := os.Getenv("NODE_NAME")
 		if instaslice.Name == nodeName {
 			for _, allocations := range instaslice.Spec.Allocations {
-				if allocations.Allocationstatus == "creating" {
+				fmt.Printf("Working on pod %v\n", allocations.PodName)
+				fmt.Print(processedAllocation)
+				if allocations.Allocationstatus == "creating" && !isAllocationProcessed(allocations.PodName, processedAllocation) {
 					//Assume pod only has one container with one GPU request
-					var profileName string
-					var Giprofileid int
-					var Ciprofileid int
-					var CiEngProfileid int
+					fmt.Printf("creating allocation for pod %v\n", allocations.PodName)
 					var deviceUUID string
 					var migUUID string
-					var deviceForMig string
-					var instasliceList inferencev1alpha1.InstasliceList
 					var giId uint32
 					var ciId uint32
 					var podUUID = allocations.PodUUID
@@ -120,7 +119,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 						fmt.Printf("Unable to get device count: %v \n", nvml.ErrorString(ret))
 					}
 
-					deviceForMig, profileName, Giprofileid, Ciprofileid, CiEngProfileid = r.getAllocation(ctx, instasliceList, deviceForMig, profileName, Giprofileid, Ciprofileid, CiEngProfileid)
+					deviceForMig, profileName, Giprofileid, Ciprofileid, CiEngProfileid := r.getAllocation(instaslice)
 					placement := nvml.GpuInstancePlacement{}
 					for i := 0; i < availableGpus; i++ {
 						device, ret := nvml.DeviceGetHandleByIndex(i)
@@ -136,11 +135,10 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 							continue
 						}
 						deviceUUID = uuid
-						gpuPlacement := allocations.GPUUUID
 
 						//Move to next GPU as this is not the selected GPU by the controller.
 
-						if gpuPlacement != uuid {
+						if allocations.GPUUUID != uuid {
 							continue
 						}
 
@@ -157,8 +155,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 
 						logger.Info("The profile id is", "giProfileInfo", giProfileInfo.Id, "Memory", giProfileInfo.MemorySizeMB)
 
-						// Path to the file containing the node name
-						updatedPlacement := r.getAllocationsToprepare(ctx, placement)
+						updatedPlacement := r.getAllocationsToprepare(placement, instaslice, allocations.PodUUID)
 						gi, retCodeForGiWithPlacement := device.CreateGpuInstanceWithPlacement(&giProfileInfo, &updatedPlacement)
 						if retCodeForGiWithPlacement != nvml.SUCCESS {
 							fmt.Printf("error creating GPU instance for '%v': %v \n ", &giProfileInfo, retCodeForGiWithPlacement)
@@ -180,6 +177,7 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 						giId, migUUID, ciId = r.getCreatedSliceDetails(giInfo, ret, device, uuid, profileName, migUUID, ciId)
 						//create slice only on one GPU, both CI and GI creation are succeeded.
 						if retCodeForCiProfile == retCodeForGi {
+							fmt.Printf("slice creation successful\n")
 							break
 						}
 
@@ -217,20 +215,26 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 						logger.Error(err, "unable to patch Node status")
 					}
 
-					r.createPreparedEntry(ctx, profileName, podUUID, deviceUUID, giId, ciId, instaslice, migUUID)
+					errAddingPrepared := r.createPreparedEntry(ctx, profileName, podUUID, deviceUUID, giId, ciId, instaslice, migUUID)
+					if errAddingPrepared == nil {
+						processedAllocation = append(processedAllocation, allocations.PodName)
+					}
 
+					return ctrl.Result{}, nil
 				}
 
-				if allocations.Allocationstatus == "deleted" {
+				if allocations.Allocationstatus == "deleted" && isAllocationProcessed(allocations.PodName, processedAllocation) {
 					logger.Info("Performing cleanup ", "pod", allocations.PodName)
 
-					deletePrepared := r.cleanUp(ctx, allocations.PodUUID, logger, nodeName)
+					deletePrepared := r.cleanUp(ctx, allocations.PodUUID, logger)
 					delete(instaslice.Spec.Allocations, allocations.PodUUID)
 					delete(instaslice.Spec.Prepared, deletePrepared)
 					errUpdatingAllocation := r.Update(ctx, &instaslice)
 					if errUpdatingAllocation != nil {
 						logger.Error(errUpdatingAllocation, "Error updating InstasSlice object")
 					}
+					deleteAllocation(allocations.PodName, processedAllocation)
+					return ctrl.Result{}, nil
 				}
 
 			}
@@ -241,23 +245,16 @@ func (r *InstaSliceDaemonsetReconciler) Reconcile(ctx context.Context, req ctrl.
 	return ctrl.Result{}, nil
 }
 
-func (r *InstaSliceDaemonsetReconciler) getAllocationsToprepare(ctx context.Context, placement nvml.GpuInstancePlacement) nvml.GpuInstancePlacement {
-	var instasliceList inferencev1alpha1.InstasliceList
-	if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
-		fmt.Printf("Error listing Instaslice %v", err)
-	}
-	for _, instaslice := range instasliceList.Items {
+func (r *InstaSliceDaemonsetReconciler) getAllocationsToprepare(placement nvml.GpuInstancePlacement, instaslice inferencev1alpha1.Instaslice, podUuid string) nvml.GpuInstancePlacement {
 
-		nodeName := os.Getenv("NODE_NAME")
-		if instaslice.Name == nodeName {
-			for _, v := range instaslice.Spec.Allocations {
-				if v.Allocationstatus == "creating" {
-					placement.Size = v.Size
-					placement.Start = v.Start
-				}
-			}
+	for _, v := range instaslice.Spec.Allocations {
+		if v.Allocationstatus == "creating" && v.PodUUID == podUuid {
+			placement.Size = v.Size
+			placement.Start = v.Start
+			return placement
 		}
 	}
+	//TODO: handle empty placement object
 	return placement
 }
 
@@ -309,28 +306,18 @@ func (*InstaSliceDaemonsetReconciler) getCreatedSliceDetails(giInfo nvml.GpuInst
 	return giId, migUUID, ciId
 }
 
-func (r *InstaSliceDaemonsetReconciler) getAllocation(ctx context.Context, instasliceList inferencev1alpha1.InstasliceList, deviceForMig string, profileName string, Giprofileid int, Ciprofileid int, CiEngProfileid int) (string, string, int, int, int) {
-	if err := r.List(ctx, &instasliceList, &client.ListOptions{}); err != nil {
-		fmt.Printf("Error listing Instaslice %v", err)
-	}
-	for _, instaslice := range instasliceList.Items {
-		nodeName := os.Getenv("NODE_NAME")
-		if instaslice.Name == nodeName {
-			for _, v := range instaslice.Spec.Allocations {
-				if v.Allocationstatus == "creating" {
-					deviceForMig = v.GPUUUID
-					profileName = v.Profile
-					Giprofileid = v.Giprofileid
-					Ciprofileid = v.CIProfileID
-					CiEngProfileid = v.CIEngProfileID
-				}
-			}
+func (r *InstaSliceDaemonsetReconciler) getAllocation(instaslice inferencev1alpha1.Instaslice) (string, string, int, int, int) {
+
+	for _, v := range instaslice.Spec.Allocations {
+		if v.Allocationstatus == "creating" {
+			return v.GPUUUID, v.Profile, v.Giprofileid, v.CIProfileID, v.CIEngProfileID
 		}
 	}
-	return deviceForMig, profileName, Giprofileid, Ciprofileid, CiEngProfileid
+	//TODO handle error
+	return "", "", -1, -1, -1
 }
 
-func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, podUuid string, logger logr.Logger, nodeName string) string {
+func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, podUuid string, logger logr.Logger) string {
 	ret := nvml.Init()
 	if ret != nvml.SUCCESS {
 		logger.Error(ret, "Unable to initialize NVML")
@@ -402,7 +389,7 @@ func (r *InstaSliceDaemonsetReconciler) cleanUp(ctx context.Context, podUuid str
 	return candidateDel
 }
 
-func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(ctx context.Context, profileName string, podUUID string, deviceUUID string, giId uint32, ciId uint32, instaslice *inferencev1alpha1.Instaslice, migUUID string) {
+func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(ctx context.Context, profileName string, podUUID string, deviceUUID string, giId uint32, ciId uint32, instaslice *inferencev1alpha1.Instaslice, migUUID string) error {
 	updatedAllocation := instaslice.Spec.Allocations[podUUID]
 	instaslicePrepared := inferencev1alpha1.PreparedDetails{
 		Profile:  profileName,
@@ -418,12 +405,13 @@ func (r *InstaSliceDaemonsetReconciler) createPreparedEntry(ctx context.Context,
 	}
 
 	instaslice.Spec.Prepared[migUUID] = instaslicePrepared
-
 	errForUpdate := r.Update(ctx, instaslice)
 
 	if errForUpdate != nil {
-		fmt.Printf("Error updating object %v", errForUpdate)
+		fmt.Printf("error adding prepared statement %v", errForUpdate)
+		return errForUpdate
 	}
+	return nil
 }
 
 // Reloads the configuration in the device plugin to update node capacity
@@ -768,8 +756,6 @@ func (r *InstaSliceDaemonsetReconciler) createConfigMap(ctx context.Context, mig
 	if err := r.Create(ctx, configMap); err != nil {
 		log.FromContext(ctx).Error(err, "failed to create ConfigMap")
 	}
-
-	log.FromContext(ctx).Info("ConfigMap created successfully", "ConfigMap.Name", configMap.Name)
 }
 
 // Manage lifecycle of configmap, delete it once the pod is deleted from the system
@@ -808,4 +794,22 @@ func deletePatchData(resourceName string) ([]byte, error) {
 		},
 	}
 	return json.Marshal(patch)
+}
+
+func isAllocationProcessed(str string, arr []string) bool {
+	for _, v := range arr {
+		if v == str {
+			return true
+		}
+	}
+	return false
+}
+
+func deleteAllocation(str string, arr []string) []string {
+	for i, v := range arr {
+		if v == str {
+			return append(arr[:i], arr[i+1:]...)
+		}
+	}
+	return arr
 }
