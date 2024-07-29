@@ -112,7 +112,7 @@ func TestCleanUp(t *testing.T) {
 	logger := testr.New(t)
 
 	// Call the cleanUp function
-	reconciler.cleanUp(context.Background(), string(pod.UID), logger)
+	reconciler.cleanUp(context.Background(), string(pod.UID), logger, "node-1")
 
 	// Verify the Instaslice resource was updated
 	var updatedInstaslice inferencev1alpha1.Instaslice
