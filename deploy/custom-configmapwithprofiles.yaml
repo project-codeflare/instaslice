@@ -4,11 +4,11 @@ metadata:
   name: test
   namespace: gpu-operator
 data:
-  a100-40gb: |-
+  update-capacity: |-
     version: v1
     flags:
       migStrategy: mixed
-  a100-40gb-1: |-
+  update-capacity-1: |-
     version: v1
     flags:
       migStrategy: mixed

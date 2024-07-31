@@ -60,7 +60,7 @@ echo "GPU operator installation commands executed successfully"
 
 kubectl apply -f ./deploy/custom-configmapwithprofiles.yaml
 
-kubectl label node --all nvidia.com/device-plugin.config=a100-40gb
+kubectl label node --all nvidia.com/device-plugin.config=update-capacity
 
 #for already deployed GPU operator
 #To avoid waiting for minutes, for now run the below command manually
