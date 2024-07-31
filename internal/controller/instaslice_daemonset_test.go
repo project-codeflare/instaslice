@@ -23,7 +23,6 @@ import (
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	"github.com/NVIDIA/go-nvml/pkg/nvml/mock/dgxa100"
-	"github.com/go-logr/logr/testr"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -108,11 +107,8 @@ func TestCleanUp(t *testing.T) {
 		},
 	}
 
-	// Create a logger
-	logger := testr.New(t)
-
 	// Call the cleanUp function
-	reconciler.cleanUp(context.Background(), string(pod.UID), logger, "node-1")
+	reconciler.cleanUp(context.Background(), string(pod.UID))
 
 	// Verify the Instaslice resource was updated
 	var updatedInstaslice inferencev1alpha1.Instaslice
