@@ -232,34 +232,7 @@ func (r *InstasliceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 
 	}
-	// removed ungated pods that do not have any allocation
-	// podSearch := &v1.Pod{}
-	// for _, instaslice := range instasliceList.Items {
-	// 	for podUuid, allocation := range instaslice.Spec.Allocations {
-	// 		if allocation.Allocationstatus == "ungated" {
-	// 			nsName := types.NamespacedName{
-	// 				Name:      allocation.PodName,
-	// 				Namespace: allocation.Namespace,
-	// 			}
-	// 			log.FromContext(ctx).Info("checking if pod exist with ", "name", allocation.PodName)
-	// 			err := r.Get(ctx, nsName, podSearch)
-	// 			if err != nil {
-	// 				if errors.IsNotFound(err) {
-	// 					log.FromContext(ctx).Info("Pod deleted still, instaslice allocation exists in ungated state")
-	// 					allocation.Allocationstatus = "deleted"
-	// 					instaslice.Spec.Allocations[podUuid] = allocation
-	// 					errUpdatingInstaslice := r.Update(ctx, &instaslice)
-	// 					if errUpdatingInstaslice != nil {
-	// 						log.FromContext(ctx).Info("unable to set instaslice allocation to deleted when no pod exists")
-	// 						return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
-	// 					}
 
-	// 				}
-	// 			}
-	// 		}
-
-	// 	}
-	// }
 	// no gated pod or dangling reference found
 	return ctrl.Result{}, nil
 }
