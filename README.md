@@ -1,3 +1,5 @@
+# Note - we have moved to https://github.com/openshift/instaslice-operator
+
 # Note - Kubecon EU 2024 code (DRA code) is now available in the legacy branch
 
 # InstaSlice
